@@ -223,3 +223,6 @@ __marimo__/
 
 # UN Ignore
 *.un*
+
+# ~ Ignore
+*~
