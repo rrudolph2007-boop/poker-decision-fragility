@@ -1,12 +1,16 @@
 import bisect
 import csv
-import math
 import random
 import time
 
 from itertools import accumulate
 
 import matplotlib.pyplot as plt
+
+from models.opponent_model import (
+    adjust_rates_for_position,
+    build_action_likelihoods,
+)
 
 from poker.cards import full_deck
 from poker.equity import load_or_build_hand_strengths
@@ -39,124 +43,23 @@ HAND_STRENGTH_CACHE = (
 
 
 # ============================================================
-# POSITION ADJUSTMENTS
+# USER INPUT HELPERS
 # ============================================================
-
-VPIP_POSITION_FACTOR = {
-    "UTG": 0.70,
-    "HJ": 0.85,
-    "CO": 1.05,
-    "BTN": 1.25,
-    "SB": 1.20,
-    "BB": 1.35,
-}
-
-PFR_POSITION_FACTOR = {
-    "UTG": 0.65,
-    "HJ": 0.82,
-    "CO": 1.05,
-    "BTN": 1.30,
-    "SB": 1.15,
-    "BB": 0.80,
-}
-
-THREEBET_POSITION_FACTOR = {
-    "UTG": 0.80,
-    "HJ": 0.90,
-    "CO": 1.00,
-    "BTN": 1.10,
-    "SB": 1.20,
-    "BB": 1.25,
-}
-
-
-def clamp(
-    value,
-    minimum,
-    maximum,
-):
-    return max(
-        minimum,
-        min(
-            value,
-            maximum,
-        ),
-    )
-
-
-def adjust_rates_for_position(
-    vpip_rate,
-    pfr_rate,
-    three_bet_rate,
-    position,
-):
-    adjusted_vpip = clamp(
-        vpip_rate
-        * VPIP_POSITION_FACTOR[
-            position
-        ],
-        0.001,
-        0.95,
-    )
-
-    adjusted_pfr = clamp(
-        pfr_rate
-        * PFR_POSITION_FACTOR[
-            position
-        ],
-        0.001,
-        0.90,
-    )
-
-    adjusted_pfr = min(
-        adjusted_pfr,
-        adjusted_vpip,
-    )
-
-    adjusted_three_bet = clamp(
-        three_bet_rate
-        * THREEBET_POSITION_FACTOR[
-            position
-        ],
-        0.001,
-        0.50,
-    )
-
-    return (
-        adjusted_vpip,
-        adjusted_pfr,
-        adjusted_three_bet,
-    )
-
-
-def sigmoid(x):
-    if x >= 0:
-        return (
-            1
-            /
-            (
-                1
-                + math.exp(-x)
-            )
-        )
-
-    exp_x = math.exp(x)
-
-    return (
-        exp_x
-        /
-        (
-            1
-            + exp_x
-        )
-    )
-
 
 def get_percentage(
     prompt,
 ):
+    """
+    Request a percentage from the user and convert it to a decimal.
+
+    Example:
+        25 becomes 0.25
+    """
+
     while True:
+
         try:
+
             value = float(
                 input(prompt)
             )
@@ -166,6 +69,7 @@ def get_percentage(
                 <= value
                 <= 100
             ):
+
                 return (
                     value / 100
                 )
@@ -175,15 +79,28 @@ def get_percentage(
             )
 
         except ValueError:
+
             print(
                 "Enter a number."
             )
 
 
+# ============================================================
+# BETA UNCERTAINTY MODEL
+# ============================================================
+
 def sample_rate_from_beta(
     estimated_rate,
     sample_size,
 ):
+    """
+    Sample a plausible version of an observed player statistic.
+
+    A smaller sample of observed hands creates more uncertainty.
+    A larger sample creates a tighter distribution around the
+    observed statistic.
+    """
+
     alpha = (
         1
         + estimated_rate
@@ -205,15 +122,25 @@ def sample_rate_from_beta(
     )
 
 
+# ============================================================
+# MAIN PROGRAM
+# ============================================================
+
 def main():
+
+    # Use a fixed seed so identical inputs produce reproducible
+    # Monte Carlo results during development and testing.
+
     random.seed(
         RANDOM_SEED
     )
+
 
     print(
         "Starting hand classes:",
         len(hand_classes),
     )
+
 
     # ========================================================
     # LOAD OR BUILD BASELINE HAND STRENGTH MODEL
@@ -229,7 +156,9 @@ def main():
         HAND_STRENGTH_CACHE,
     )
 
+
     if baseline_simulations_run > 0:
+
         print()
 
         print(
@@ -241,50 +170,61 @@ def main():
             "seconds",
         )
 
+
     # ========================================================
     # HERO HAND INPUT
     # ========================================================
 
     while True:
+
         hero_hand = input(
             "\nEnter hero hand. Example: AS QH: "
         ).upper().split()
 
+
         if len(hero_hand) != 2:
+
             print(
                 "Enter exactly two cards."
             )
 
             continue
 
+
         if (
             hero_hand[0] not in full_deck
             or
             hero_hand[1] not in full_deck
         ):
+
             print(
                 "Enter valid cards."
             )
 
             continue
 
+
         if (
             hero_hand[0]
             == hero_hand[1]
         ):
+
             print(
                 "Cards cannot be identical."
             )
 
             continue
 
+
         break
 
+
     # ========================================================
-    # MODELED OPPONENT STAT INPUT
+    # MODELED OPPONENT STATISTICS
     # ========================================================
 
     while True:
+
         vpip = get_percentage(
             "Modeled opponent VPIP percentage: "
         )
@@ -297,8 +237,11 @@ def main():
             "Modeled opponent 3 bet percentage: "
         )
 
+
         if pfr <= vpip:
+
             break
+
 
         print()
 
@@ -306,26 +249,35 @@ def main():
             "PFR should not exceed VPIP."
         )
 
+
     while True:
+
         try:
+
             observed_hands = int(
                 input(
                     "Number of observed hands: "
                 )
             )
 
+
             if observed_hands > 0:
+
                 break
 
+
         except ValueError:
+
             pass
+
 
         print(
             "Enter a positive whole number."
         )
 
+
     # ========================================================
-    # POSITION
+    # MODELED OPPONENT POSITION
     # ========================================================
 
     valid_positions = [
@@ -337,18 +289,24 @@ def main():
         "BB",
     ]
 
+
     while True:
+
         position = input(
             "Modeled opponent position "
             "(UTG, HJ, CO, BTN, SB, BB): "
         ).upper()
 
+
         if position in valid_positions:
+
             break
+
 
         print(
             "Enter a valid position."
         )
+
 
     # ========================================================
     # OBSERVED ACTION
@@ -360,7 +318,9 @@ def main():
         "3BET",
     ]
 
+
     while True:
+
         observed_action = input(
             "Modeled opponent action "
             "(RAISE, CALL, 3BET): "
@@ -369,29 +329,38 @@ def main():
             "",
         )
 
+
         if observed_action in valid_actions:
+
             break
+
 
         print(
             "Enter RAISE, CALL, or 3BET."
         )
 
+
     # ========================================================
-    # AVAILABLE COMBOS AFTER HERO BLOCKERS
+    # AVAILABLE HAND COMBINATIONS AFTER HERO BLOCKERS
     # ========================================================
 
     available_combos = {}
+
     combo_counts = {}
 
+
     for hand_class in hand_classes:
+
         combos = generate_class_combos(
             hand_class,
             hero_hand,
         )
 
+
         available_combos[
             hand_class
         ] = combos
+
 
         combo_counts[
             hand_class
@@ -399,197 +368,14 @@ def main():
             combos
         )
 
-    # ========================================================
-    # ACTION MODEL FUNCTIONS
-    # ========================================================
-
-    def calibrate_threshold(
-        target_frequency,
-        slope,
-    ):
-        low = -1.0
-        high = 2.0
-
-        for iteration in range(
-            70
-        ):
-            midpoint = (
-                low + high
-            ) / 2
-
-            weighted_total = 0
-            combination_total = 0
-
-            for hand_class in hand_classes:
-                count = (
-                    combo_counts[
-                        hand_class
-                    ]
-                )
-
-                strength = (
-                    hand_strengths[
-                        hand_class
-                    ]
-                )
-
-                probability = sigmoid(
-                    slope
-                    * (
-                        strength
-                        - midpoint
-                    )
-                )
-
-                weighted_total += (
-                    probability
-                    * count
-                )
-
-                combination_total += (
-                    count
-                )
-
-            current_frequency = (
-                weighted_total
-                / combination_total
-            )
-
-            if (
-                current_frequency
-                > target_frequency
-            ):
-                low = midpoint
-
-            else:
-                high = midpoint
-
-        return (
-            low + high
-        ) / 2
-
-
-    def build_action_likelihoods(
-        action,
-        vpip_rate,
-        pfr_rate,
-        three_bet_rate,
-        slope_scale=1.0,
-    ):
-        likelihoods = {}
-
-        if action == "RAISE":
-            slope = (
-                18
-                * slope_scale
-            )
-
-            threshold = (
-                calibrate_threshold(
-                    pfr_rate,
-                    slope,
-                )
-            )
-
-            for hand_class in hand_classes:
-                likelihoods[
-                    hand_class
-                ] = sigmoid(
-                    slope
-                    * (
-                        hand_strengths[
-                            hand_class
-                        ]
-                        - threshold
-                    )
-                )
-
-        elif action == "CALL":
-            slope = (
-                16
-                * slope_scale
-            )
-
-            vpip_threshold = (
-                calibrate_threshold(
-                    vpip_rate,
-                    slope,
-                )
-            )
-
-            raise_threshold = (
-                calibrate_threshold(
-                    pfr_rate,
-                    slope,
-                )
-            )
-
-            for hand_class in hand_classes:
-                strength = (
-                    hand_strengths[
-                        hand_class
-                    ]
-                )
-
-                play_probability = sigmoid(
-                    slope
-                    * (
-                        strength
-                        - vpip_threshold
-                    )
-                )
-
-                raise_probability = sigmoid(
-                    slope
-                    * (
-                        strength
-                        - raise_threshold
-                    )
-                )
-
-                call_probability = (
-                    play_probability
-                    - raise_probability
-                )
-
-                likelihoods[
-                    hand_class
-                ] = max(
-                    call_probability,
-                    1e-12,
-                )
-
-        elif action == "3BET":
-            slope = (
-                24
-                * slope_scale
-            )
-
-            threshold = (
-                calibrate_threshold(
-                    three_bet_rate,
-                    slope,
-                )
-            )
-
-            for hand_class in hand_classes:
-                likelihoods[
-                    hand_class
-                ] = sigmoid(
-                    slope
-                    * (
-                        hand_strengths[
-                            hand_class
-                        ]
-                        - threshold
-                    )
-                )
-
-        return likelihoods
 
     # ========================================================
     # CENTRAL MODELED OPPONENT
     # ========================================================
+
+    # The implementation of position adjustment now lives in:
+    #
+    # models/opponent_model.py
 
     (
         adjusted_vpip,
@@ -602,23 +388,41 @@ def main():
         position,
     )
 
+
+    # The logistic action model and threshold calibration also
+    # live in models/opponent_model.py.
+
     central_likelihoods = (
         build_action_likelihoods(
             observed_action,
             adjusted_vpip,
             adjusted_pfr,
             adjusted_three_bet,
+            hand_classes,
+            hand_strengths,
+            combo_counts,
         )
     )
 
+
     # ========================================================
-    # BAYESIAN RANGE UPDATE
+    # BAYESIAN-STYLE RANGE UPDATE
     # ========================================================
 
     central_range_mass = {}
+
     normalizing_constant = 0
 
+
     for hand_class in hand_classes:
+
+        # Prior range probability is proportional to the number
+        # of available physical combinations for the hand class.
+        #
+        # The action likelihood then increases or decreases that
+        # probability depending on how likely the opponent would
+        # be to take the observed action with that hand.
+
         mass = (
             combo_counts[
                 hand_class
@@ -628,20 +432,28 @@ def main():
             ]
         )
 
+
         central_range_mass[
             hand_class
         ] = mass
+
 
         normalizing_constant += (
             mass
         )
 
+
+    # Convert the unnormalized masses into probabilities that
+    # sum to 1.
+
     for hand_class in hand_classes:
+
         central_range_mass[
             hand_class
         ] /= (
             normalizing_constant
         )
+
 
     # ========================================================
     # DISPLAY INFERRED RANGE
@@ -655,6 +467,7 @@ def main():
             ],
         reverse=True,
     )
+
 
     print()
 
@@ -672,17 +485,21 @@ def main():
 
     print()
 
+
     print(
         "Position:",
         position,
     )
+
 
     print(
         "Observed Action:",
         observed_action,
     )
 
+
     print()
+
 
     print(
         "Adjusted VPIP:",
@@ -693,6 +510,7 @@ def main():
         "%",
     )
 
+
     print(
         "Adjusted PFR:",
         round(
@@ -701,6 +519,7 @@ def main():
         ),
         "%",
     )
+
 
     print(
         "Adjusted 3 Bet:",
@@ -711,6 +530,7 @@ def main():
         "%",
     )
 
+
     print()
 
     print(
@@ -719,10 +539,12 @@ def main():
 
     print()
 
+
     for index, hand_class in enumerate(
         sorted_range[:25],
         start=1,
     ):
+
         print(
             index,
             hand_class,
@@ -744,45 +566,64 @@ def main():
             "%",
         )
 
+
     # ========================================================
     # POT AND CALL INPUT
     # ========================================================
 
     while True:
+
         try:
+
             current_pot = float(
                 input(
                     "\nCurrent pot before your call: "
                 )
             )
 
+
             if current_pot > 0:
+
                 break
 
+
         except ValueError:
+
             pass
+
 
         print(
             "Enter a positive number."
         )
 
+
     while True:
+
         try:
+
             call_amount = float(
                 input(
                     "Amount required to call: "
                 )
             )
 
+
             if call_amount > 0:
+
                 break
 
+
         except ValueError:
+
             pass
+
 
         print(
             "Enter a positive number."
         )
+
+
+    # Minimum equity Hero needs for the call to break even.
 
     break_even_equity = (
         call_amount
@@ -793,15 +634,22 @@ def main():
         )
     )
 
+
     # ========================================================
-    # SIX PLAYER DECISION FRAGILITY SIMULATION
+    # SIX-PLAYER DECISION FRAGILITY SIMULATION
     # ========================================================
 
     model_equities = []
+
     model_evs = []
+
     model_action_rates = []
 
     profitable_models = 0
+
+
+    # Hero's two known cards can never appear in an opponent
+    # hand or on the board.
 
     base_deck = [
         card
@@ -809,20 +657,28 @@ def main():
         if card not in hero_hand
     ]
 
+
     decision_start = (
         time.perf_counter()
     )
+
 
     for model_number in range(
         1,
         NUMBER_OF_MODELS + 1,
     ):
+
+        # ----------------------------------------------------
+        # SAMPLE PLAUSIBLE PLAYER STATISTICS
+        # ----------------------------------------------------
+
         sampled_vpip = (
             sample_rate_from_beta(
                 vpip,
                 observed_hands,
             )
         )
+
 
         sampled_pfr = (
             sample_rate_from_beta(
@@ -831,6 +687,7 @@ def main():
             )
         )
 
+
         sampled_three_bet = (
             sample_rate_from_beta(
                 three_bet,
@@ -838,10 +695,14 @@ def main():
             )
         )
 
+
+        # PFR cannot logically exceed VPIP.
+
         sampled_pfr = min(
             sampled_pfr,
             sampled_vpip,
         )
+
 
         (
             model_vpip,
@@ -854,6 +715,10 @@ def main():
             position,
         )
 
+
+        # Introduce uncertainty about the exact shape of the
+        # opponent's action-probability curve.
+
         slope_scale = (
             random.uniform(
                 0.85,
@@ -861,36 +726,55 @@ def main():
             )
         )
 
+
         model_likelihoods = (
             build_action_likelihoods(
                 observed_action,
                 model_vpip,
                 model_pfr,
                 model_three_bet,
+                hand_classes,
+                hand_strengths,
+                combo_counts,
                 slope_scale,
             )
         )
 
+
+        # ----------------------------------------------------
+        # BUILD WEIGHTED MODELED-OPPONENT RANGE
+        # ----------------------------------------------------
+
         combo_population = []
+
         combo_weights = []
 
+
         for hand_class in hand_classes:
+
             weight = (
                 model_likelihoods[
                     hand_class
                 ]
             )
 
+
             for combo in available_combos[
                 hand_class
             ]:
+
                 combo_population.append(
                     combo
                 )
 
+
                 combo_weights.append(
                     weight
                 )
+
+
+        # Cumulative weights allow efficient weighted sampling
+        # using binary search.
 
         cumulative_weights = list(
             accumulate(
@@ -898,19 +782,32 @@ def main():
             )
         )
 
+
         total_weight = (
             cumulative_weights[-1]
         )
 
+
         equity_total = 0
+
+
+        # ----------------------------------------------------
+        # MONTE CARLO TRIALS FOR THIS PLAUSIBLE MODEL
+        # ----------------------------------------------------
 
         for simulation in range(
             TRIALS_PER_MODEL
         ):
+
+            # ------------------------------------------------
+            # SAMPLE THE MODELED OPPONENT
+            # ------------------------------------------------
+
             random_weight = (
                 random.random()
                 * total_weight
             )
+
 
             combo_index = (
                 bisect.bisect_left(
@@ -919,26 +816,37 @@ def main():
                 )
             )
 
+
             modeled_opponent_hand = (
                 combo_population[
                     combo_index
                 ]
             )
 
+
             simulation_deck = (
                 base_deck.copy()
             )
 
+
             for card in modeled_opponent_hand:
+
                 simulation_deck.remove(
                     card
                 )
 
+
+            # ------------------------------------------------
+            # DEAL FOUR ADDITIONAL RANDOM OPPONENTS
+            # ------------------------------------------------
+
             random_opponent_hands = []
+
 
             for opponent_number in range(
                 RANDOM_OPPONENTS
             ):
+
                 random_hand = (
                     random.sample(
                         simulation_deck,
@@ -946,19 +854,35 @@ def main():
                     )
                 )
 
+
                 random_opponent_hands.append(
                     random_hand
                 )
 
+
+                # Remove the dealt cards so no physical card can
+                # be dealt to more than one player.
+
                 for card in random_hand:
+
                     simulation_deck.remove(
                         card
                     )
+
+
+            # ------------------------------------------------
+            # DEAL COMMUNITY CARDS
+            # ------------------------------------------------
 
             board = random.sample(
                 simulation_deck,
                 5,
             )
+
+
+            # ------------------------------------------------
+            # EVALUATE HERO
+            # ------------------------------------------------
 
             hero_score = (
                 evaluate_hand(
@@ -967,6 +891,11 @@ def main():
                 )
             )
 
+
+            # ------------------------------------------------
+            # EVALUATE MODELED OPPONENT
+            # ------------------------------------------------
+
             modeled_opponent_score = (
                 evaluate_hand(
                     modeled_opponent_hand
@@ -974,11 +903,18 @@ def main():
                 )
             )
 
+
             opponent_scores = [
                 modeled_opponent_score
             ]
 
+
+            # ------------------------------------------------
+            # EVALUATE FOUR RANDOM OPPONENTS
+            # ------------------------------------------------
+
             for random_hand in random_opponent_hands:
+
                 random_opponent_score = (
                     evaluate_hand(
                         random_hand
@@ -986,42 +922,80 @@ def main():
                     )
                 )
 
+
                 opponent_scores.append(
                     random_opponent_score
                 )
+
+
+            # ------------------------------------------------
+            # MULTIWAY EQUITY
+            # ------------------------------------------------
 
             all_scores = (
                 [hero_score]
                 + opponent_scores
             )
 
+
             best_score = max(
                 all_scores
             )
 
+
+            # If another player has a stronger hand,
+            # Hero receives no share of the pot.
+
             if hero_score < best_score:
+
                 hero_equity_share = 0
 
+
             else:
+
+                # Hero has the best hand, but multiple players
+                # may have tied for that same best hand.
+
                 number_of_winners = 0
 
+
                 for score in all_scores:
+
                     if score == best_score:
+
                         number_of_winners += 1
+
+
+                # Examples:
+                #
+                # Hero wins alone       -> 1
+                # Hero ties one player  -> 1/2
+                # Hero ties two players -> 1/3
 
                 hero_equity_share = (
                     1
                     / number_of_winners
                 )
 
+
             equity_total += (
                 hero_equity_share
             )
+
+
+        # ----------------------------------------------------
+        # EQUITY FOR THIS PLAUSIBLE OPPONENT MODEL
+        # ----------------------------------------------------
 
         model_equity = (
             equity_total
             / TRIALS_PER_MODEL
         )
+
+
+        # ----------------------------------------------------
+        # EXPECTED VALUE OF CALL
+        # ----------------------------------------------------
 
         model_ev = (
             model_equity
@@ -1032,37 +1006,56 @@ def main():
             - call_amount
         )
 
+
         model_equities.append(
             model_equity
         )
+
 
         model_evs.append(
             model_ev
         )
 
+
+        # ----------------------------------------------------
+        # STORE ACTION RATE FOR OUTPUT
+        # ----------------------------------------------------
+
         if observed_action == "RAISE":
+
             model_action_rate = (
                 model_pfr
             )
 
+
         elif observed_action == "CALL":
+
             model_action_rate = max(
                 model_vpip
                 - model_pfr,
                 0,
             )
 
+
         else:
+
             model_action_rate = (
                 model_three_bet
             )
+
 
         model_action_rates.append(
             model_action_rate
         )
 
+
+        # Decision Fragility ultimately depends on whether each
+        # plausible model considers calling profitable.
+
         if model_ev > 0:
+
             profitable_models += 1
+
 
         print(
             "Model",
@@ -1082,9 +1075,11 @@ def main():
             ),
         )
 
+
     decision_end = (
         time.perf_counter()
     )
+
 
     # ========================================================
     # DECISION FRAGILITY
@@ -1095,6 +1090,14 @@ def main():
         / NUMBER_OF_MODELS
     )
 
+
+    # q = fraction of models where calling has positive EV.
+    #
+    # F = 1 - |2q - 1|
+    #
+    # F = 0 when all models agree.
+    # F = 1 when the models split 50/50.
+
     fragility_score = (
         1
         - abs(
@@ -1103,6 +1106,7 @@ def main():
             - 1
         )
     )
+
 
     # ========================================================
     # SUMMARY STATISTICS
@@ -1113,35 +1117,43 @@ def main():
         / len(model_equities)
     )
 
+
     minimum_equity = min(
         model_equities
     )
 
+
     maximum_equity = max(
         model_equities
     )
+
 
     average_ev = (
         sum(model_evs)
         / len(model_evs)
     )
 
+
     minimum_ev = min(
         model_evs
     )
+
 
     maximum_ev = max(
         model_evs
     )
 
+
     sorted_equities = sorted(
         model_equities
     )
+
 
     lower_index = int(
         0.05
         * len(sorted_equities)
     )
+
 
     upper_index = (
         int(
@@ -1151,17 +1163,20 @@ def main():
         - 1
     )
 
+
     lower_equity = (
         sorted_equities[
             lower_index
         ]
     )
 
+
     upper_equity = (
         sorted_equities[
             upper_index
         ]
     )
+
 
     # ========================================================
     # FINAL RESULTS
@@ -1183,34 +1198,43 @@ def main():
 
     print()
 
+
     print(
         "Hero Hand:",
         hero_hand,
     )
 
+
     print()
+
 
     print(
         "Table Model:"
     )
 
+
     print(
         "Hero + 1 inferred opponent + 4 random opponents"
     )
 
+
     print()
+
 
     print(
         "Modeled Opponent Position:",
         position,
     )
 
+
     print(
         "Modeled Opponent Action:",
         observed_action,
     )
 
+
     print()
+
 
     print(
         "Break Even Equity:",
@@ -1221,7 +1245,9 @@ def main():
         "%",
     )
 
+
     print()
+
 
     print(
         "Average Hero Equity:",
@@ -1232,6 +1258,7 @@ def main():
         "%",
     )
 
+
     print(
         "Minimum Hero Equity:",
         round(
@@ -1240,6 +1267,7 @@ def main():
         ),
         "%",
     )
+
 
     print(
         "Maximum Hero Equity:",
@@ -1250,7 +1278,9 @@ def main():
         "%",
     )
 
+
     print()
+
 
     print(
         "Approximate 90% Model Equity Interval:",
@@ -1267,7 +1297,9 @@ def main():
         "%",
     )
 
+
     print()
+
 
     print(
         "Average Call EV:",
@@ -1277,6 +1309,7 @@ def main():
         ),
     )
 
+
     print(
         "Minimum Call EV:",
         round(
@@ -1284,6 +1317,7 @@ def main():
             2,
         ),
     )
+
 
     print(
         "Maximum Call EV:",
@@ -1293,7 +1327,9 @@ def main():
         ),
     )
 
+
     print()
+
 
     print(
         "Profitable Models:",
@@ -1301,6 +1337,7 @@ def main():
         "/",
         NUMBER_OF_MODELS,
     )
+
 
     print(
         "Call Profitable Across Models:",
@@ -1311,7 +1348,9 @@ def main():
         "%",
     )
 
+
     print()
+
 
     print(
         "Decision Fragility Score:",
@@ -1322,7 +1361,9 @@ def main():
         "%",
     )
 
+
     print()
+
 
     print(
         "Decision Simulation Runtime:",
@@ -1334,6 +1375,7 @@ def main():
         "seconds",
     )
 
+
     # ========================================================
     # SAVE INFERRED RANGE
     # ========================================================
@@ -1343,9 +1385,11 @@ def main():
         "w",
         newline="",
     ) as file:
+
         writer = csv.writer(
             file
         )
+
 
         writer.writerow(
             [
@@ -1356,21 +1400,27 @@ def main():
             ]
         )
 
+
         for hand_class in sorted_range:
+
             writer.writerow(
                 [
                     hand_class,
+
                     hand_strengths[
                         hand_class
                     ],
+
                     central_likelihoods[
                         hand_class
                     ],
+
                     central_range_mass[
                         hand_class
                     ],
                 ]
             )
+
 
     # ========================================================
     # SAVE DECISION MODELS
@@ -1381,9 +1431,11 @@ def main():
         "w",
         newline="",
     ) as file:
+
         writer = csv.writer(
             file
         )
+
 
         writer.writerow(
             [
@@ -1395,31 +1447,38 @@ def main():
             ]
         )
 
+
         for index in range(
             NUMBER_OF_MODELS
         ):
+
             writer.writerow(
                 [
                     index + 1,
+
                     model_equities[
                         index
                     ],
+
                     model_evs[
                         index
                     ],
+
                     (
                         model_evs[
                             index
                         ] > 0
                     ),
+
                     model_action_rates[
                         index
                     ],
                 ]
             )
 
+
     # ========================================================
-    # GRAPH 1
+    # GRAPH 1: DECISION FRAGILITY
     # ========================================================
 
     model_numbers = list(
@@ -1429,21 +1488,27 @@ def main():
         )
     )
 
+
     equity_percentages = []
 
+
     for equity in model_equities:
+
         equity_percentages.append(
             equity * 100
         )
+
 
     plt.figure(
         figsize=(11, 6)
     )
 
+
     plt.scatter(
         model_numbers,
         equity_percentages,
     )
+
 
     plt.axhline(
         y=break_even_equity * 100,
@@ -1451,17 +1516,21 @@ def main():
         label="Break Even Equity",
     )
 
+
     plt.xlabel(
         "Plausible Modeled Opponent"
     )
+
 
     plt.ylabel(
         "Hero Six Player Equity (%)"
     )
 
+
     plt.title(
         "Decision Fragility in a Six Player Pot"
     )
+
 
     plt.legend()
 
@@ -1469,53 +1538,66 @@ def main():
 
     plt.show()
 
+
     # ========================================================
-    # GRAPH 2
+    # GRAPH 2: INFERRED OPPONENT RANGE
     # ========================================================
 
     top_20 = (
         sorted_range[:20]
     )
 
+
     top_20_mass = []
 
+
     for hand_class in top_20:
+
         top_20_mass.append(
             central_range_mass[
                 hand_class
             ] * 100
         )
 
+
     plt.figure(
         figsize=(11, 6)
     )
+
 
     plt.bar(
         top_20,
         top_20_mass,
     )
 
+
     plt.xlabel(
         "Modeled Opponent Starting Hand"
     )
+
 
     plt.ylabel(
         "Posterior Range Mass (%)"
     )
 
+
     plt.title(
         "Most Likely Holdings for the Modeled Opponent"
     )
+
 
     plt.xticks(
         rotation=60
     )
 
+
     plt.grid(
         axis="y"
     )
 
+
     plt.show()
+
 
     # ========================================================
     # FINAL NOTES
@@ -1527,9 +1609,11 @@ def main():
         "Saved inferred_range.csv"
     )
 
+
     print(
         "Saved decision_fragility_models.csv"
     )
+
 
     print()
 
@@ -1537,13 +1621,16 @@ def main():
         "Simulation structure:"
     )
 
+
     print(
         "1 modeled opponent uses inferred range."
     )
 
+
     print(
         "4 additional opponents receive uniformly random hands."
     )
+
 
     print()
 
@@ -1551,10 +1638,12 @@ def main():
         "Important: this is a probabilistic research prototype."
     )
 
+
     print(
         "Position multipliers and logistic action probabilities "
         "are heuristic model assumptions, not solver-derived GTO ranges."
     )
+
 
     print(
         "The four additional opponents are currently modeled as "
@@ -1563,4 +1652,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
