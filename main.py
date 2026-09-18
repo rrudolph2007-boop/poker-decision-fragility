@@ -5,6 +5,7 @@ import os
 import json
 import csv
 import bisect
+
 from itertools import accumulate
 
 import matplotlib.pyplot as plt
@@ -18,6 +19,9 @@ BASELINE_TRIALS_PER_CLASS = 1000
 
 NUMBER_OF_MODELS = 50
 TRIALS_PER_MODEL = 6000
+
+# One modeled opponent + four random opponents + Hero = 6 players
+RANDOM_OPPONENTS = 4
 
 HAND_STRENGTH_CACHE = (
     "hand_strengths_"
@@ -66,7 +70,7 @@ rank_values = {
 
 
 # ============================================================
-# BUILD FULL DECK
+# BUILD FULL 52 CARD DECK
 # ============================================================
 
 full_deck = []
@@ -95,7 +99,7 @@ def evaluate_hand(cards):
         )
 
 
-    # COUNT RANKS
+    # Count how many times each rank appears
 
     counts = {}
 
@@ -110,14 +114,13 @@ def evaluate_hand(cards):
             counts[value] = 1
 
 
-    # PAIRS, TRIPS, QUADS
-
     pair_count = 0
     three_count = 0
 
     has_pair = False
     has_three_of_a_kind = False
     has_four_of_a_kind = False
+
 
     for count in counts.values():
 
@@ -140,6 +143,7 @@ def evaluate_hand(cards):
         pair_count >= 2
     )
 
+
     has_full_house = (
         (
             pair_count >= 1
@@ -149,7 +153,9 @@ def evaluate_hand(cards):
     )
 
 
+    # --------------------------------------------------------
     # PAIR RANKS
+    # --------------------------------------------------------
 
     pair_ranks = []
 
@@ -157,14 +163,19 @@ def evaluate_hand(cards):
 
         if counts[rank] == 2:
 
-            pair_ranks.append(rank)
+            pair_ranks.append(
+                rank
+            )
+
 
     pair_ranks.sort(
         reverse=True
     )
 
 
+    # --------------------------------------------------------
     # TRIP RANKS
+    # --------------------------------------------------------
 
     trip_ranks = []
 
@@ -172,16 +183,22 @@ def evaluate_hand(cards):
 
         if counts[rank] == 3:
 
-            trip_ranks.append(rank)
+            trip_ranks.append(
+                rank
+            )
+
 
     trip_ranks.sort(
         reverse=True
     )
 
 
-    # SUITS
+    # --------------------------------------------------------
+    # FLUSH
+    # --------------------------------------------------------
 
     suit_counts = {}
+
 
     for card in cards:
 
@@ -196,10 +213,9 @@ def evaluate_hand(cards):
             suit_counts[suit] = 1
 
 
-    # FLUSH
-
     has_flush = False
     flush_suit = None
+
 
     for suit in suit_counts:
 
@@ -209,26 +225,37 @@ def evaluate_hand(cards):
             flush_suit = suit
 
 
+    # --------------------------------------------------------
     # STRAIGHT
+    # --------------------------------------------------------
 
     straight_values = list(
         set(values)
     )
 
+
+    # Allow Ace to function as low card in A-2-3-4-5
+
     if 14 in straight_values:
 
-        straight_values.append(1)
+        straight_values.append(
+            1
+        )
+
 
     straight_values = list(
         set(straight_values)
     )
 
+
     straight_values.sort()
+
 
     consecutive = 1
 
     has_straight = False
     straight_high = 0
+
 
     for i in range(
         1,
@@ -246,15 +273,22 @@ def evaluate_hand(cards):
 
             consecutive = 1
 
+
         if consecutive >= 5:
 
             has_straight = True
-            straight_high = straight_values[i]
+
+            straight_high = (
+                straight_values[i]
+            )
 
 
+    # --------------------------------------------------------
     # FLUSH VALUES
+    # --------------------------------------------------------
 
     flush_values = []
+
 
     if has_flush:
 
@@ -263,30 +297,41 @@ def evaluate_hand(cards):
             if card[1] == flush_suit:
 
                 flush_values.append(
-                    rank_values[card[0]]
+                    rank_values[
+                        card[0]
+                    ]
                 )
 
 
+    # --------------------------------------------------------
     # STRAIGHT FLUSH
+    # --------------------------------------------------------
 
     straight_flush_values = (
         flush_values.copy()
     )
 
+
     if 14 in straight_flush_values:
 
-        straight_flush_values.append(1)
+        straight_flush_values.append(
+            1
+        )
+
 
     straight_flush_values = list(
         set(straight_flush_values)
     )
 
+
     straight_flush_values.sort()
+
 
     consecutive = 1
 
     has_straight_flush = False
     straight_flush_high = 0
+
 
     for i in range(
         1,
@@ -304,6 +349,7 @@ def evaluate_hand(cards):
 
             consecutive = 1
 
+
         if consecutive >= 5:
 
             has_straight_flush = True
@@ -313,13 +359,19 @@ def evaluate_hand(cards):
             )
 
 
+    # --------------------------------------------------------
     # HIGH CARD
+    # --------------------------------------------------------
 
-    sorted_values = values.copy()
+    sorted_values = (
+        values.copy()
+    )
+
 
     sorted_values.sort(
         reverse=True
     )
+
 
     high_card_score = (
         [0]
@@ -327,23 +379,33 @@ def evaluate_hand(cards):
     )
 
 
+    # --------------------------------------------------------
     # PAIR
+    # --------------------------------------------------------
 
     if has_pair:
 
-        pair_rank = pair_ranks[0]
+        pair_rank = (
+            pair_ranks[0]
+        )
+
 
         kickers = []
+
 
         for value in values:
 
             if value != pair_rank:
 
-                kickers.append(value)
+                kickers.append(
+                    value
+                )
+
 
         kickers.sort(
             reverse=True
         )
+
 
         pair_score = (
             [1, pair_rank]
@@ -351,7 +413,9 @@ def evaluate_hand(cards):
         )
 
 
+    # --------------------------------------------------------
     # TWO PAIR
+    # --------------------------------------------------------
 
     if has_two_pair:
 
@@ -359,17 +423,23 @@ def evaluate_hand(cards):
             pair_ranks[:2]
         )
 
+
         kickers = []
+
 
         for value in values:
 
             if value not in best_pair_ranks:
 
-                kickers.append(value)
+                kickers.append(
+                    value
+                )
+
 
         kickers.sort(
             reverse=True
         )
+
 
         two_pair_score = (
             [2]
@@ -378,23 +448,33 @@ def evaluate_hand(cards):
         )
 
 
+    # --------------------------------------------------------
     # THREE OF A KIND
+    # --------------------------------------------------------
 
     if has_three_of_a_kind:
 
-        trip_rank = trip_ranks[0]
+        trip_rank = (
+            trip_ranks[0]
+        )
+
 
         kickers = []
+
 
         for value in values:
 
             if value != trip_rank:
 
-                kickers.append(value)
+                kickers.append(
+                    value
+                )
+
 
         kickers.sort(
             reverse=True
         )
+
 
         three_of_a_kind_score = (
             [3, trip_rank]
@@ -402,7 +482,9 @@ def evaluate_hand(cards):
         )
 
 
+    # --------------------------------------------------------
     # STRAIGHT
+    # --------------------------------------------------------
 
     if has_straight:
 
@@ -412,7 +494,9 @@ def evaluate_hand(cards):
         ]
 
 
+    # --------------------------------------------------------
     # FLUSH
+    # --------------------------------------------------------
 
     if has_flush:
 
@@ -420,19 +504,23 @@ def evaluate_hand(cards):
             reverse=True
         )
 
+
         flush_score = (
             [5]
             + flush_values[:5]
         )
 
 
+    # --------------------------------------------------------
     # FULL HOUSE
+    # --------------------------------------------------------
 
     if has_full_house:
 
         full_house_trip = (
             trip_ranks[0]
         )
+
 
         if len(trip_ranks) >= 2:
 
@@ -446,6 +534,7 @@ def evaluate_hand(cards):
                 pair_ranks[0]
             )
 
+
         full_house_score = [
             6,
             full_house_trip,
@@ -453,11 +542,14 @@ def evaluate_hand(cards):
         ]
 
 
+    # --------------------------------------------------------
     # FOUR OF A KIND
+    # --------------------------------------------------------
 
     if has_four_of_a_kind:
 
         quad_rank = 0
+
 
         for rank in counts:
 
@@ -465,17 +557,23 @@ def evaluate_hand(cards):
 
                 quad_rank = rank
 
+
         kickers = []
+
 
         for value in values:
 
             if value != quad_rank:
 
-                kickers.append(value)
+                kickers.append(
+                    value
+                )
+
 
         kickers.sort(
             reverse=True
         )
+
 
         four_of_a_kind_score = [
             7,
@@ -484,7 +582,9 @@ def evaluate_hand(cards):
         ]
 
 
+    # --------------------------------------------------------
     # STRAIGHT FLUSH
+    # --------------------------------------------------------
 
     if has_straight_flush:
 
@@ -494,7 +594,9 @@ def evaluate_hand(cards):
         ]
 
 
+    # --------------------------------------------------------
     # RETURN STRONGEST HAND
+    # --------------------------------------------------------
 
     if has_straight_flush:
 
@@ -540,7 +642,7 @@ def evaluate_hand(cards):
 hand_classes = []
 
 
-# PAIRS
+# Pocket pairs
 
 for rank in rank_order:
 
@@ -549,7 +651,7 @@ for rank in rank_order:
     )
 
 
-# SUITED
+# Suited hands
 
 for i in range(
     len(rank_order)
@@ -567,7 +669,7 @@ for i in range(
         )
 
 
-# OFFSUIT
+# Offsuit hands
 
 for i in range(
     len(rank_order)
@@ -592,7 +694,7 @@ print(
 
 
 # ============================================================
-# PHYSICAL COMBINATIONS
+# PHYSICAL CARD COMBINATIONS
 # ============================================================
 
 def generate_class_combos(
@@ -604,14 +706,20 @@ def generate_class_combos(
 
         blocked_cards = []
 
+
     combos = []
 
 
+    # --------------------------------------------------------
     # POCKET PAIR
+    # --------------------------------------------------------
 
     if len(hand_class) == 2:
 
-        rank = hand_class[0]
+        rank = (
+            hand_class[0]
+        )
+
 
         for i in range(
             len(suits)
@@ -632,6 +740,7 @@ def generate_class_combos(
                     + suits[j]
                 )
 
+
                 if (
                     card1 not in blocked_cards
                     and
@@ -646,12 +755,23 @@ def generate_class_combos(
                     )
 
 
+    # --------------------------------------------------------
     # SUITED
+    # --------------------------------------------------------
 
-    elif hand_class[2].lower() == "s":
+    elif (
+        hand_class[2].lower()
+        == "s"
+    ):
 
-        rank1 = hand_class[0]
-        rank2 = hand_class[1]
+        rank1 = (
+            hand_class[0]
+        )
+
+        rank2 = (
+            hand_class[1]
+        )
+
 
         for suit in suits:
 
@@ -664,6 +784,7 @@ def generate_class_combos(
                 rank2
                 + suit
             )
+
 
             if (
                 card1 not in blocked_cards
@@ -679,12 +800,23 @@ def generate_class_combos(
                 )
 
 
+    # --------------------------------------------------------
     # OFFSUIT
+    # --------------------------------------------------------
 
-    elif hand_class[2].lower() == "o":
+    elif (
+        hand_class[2].lower()
+        == "o"
+    ):
 
-        rank1 = hand_class[0]
-        rank2 = hand_class[1]
+        rank1 = (
+            hand_class[0]
+        )
+
+        rank2 = (
+            hand_class[1]
+        )
+
 
         for suit1 in suits:
 
@@ -701,6 +833,7 @@ def generate_class_combos(
                         rank2
                         + suit2
                     )
+
 
                     if (
                         card1 not in blocked_cards
@@ -734,6 +867,7 @@ def estimate_class_equity(
         )
     )
 
+
     equity_total = 0
 
 
@@ -745,9 +879,11 @@ def estimate_class_equity(
             hero_combos
         )
 
+
         simulation_deck = (
             full_deck.copy()
         )
+
 
         for card in hero_hand:
 
@@ -760,6 +896,7 @@ def estimate_class_equity(
             simulation_deck,
             2
         )
+
 
         for card in opponent_hand:
 
@@ -775,17 +912,21 @@ def estimate_class_equity(
 
 
         hero_score = evaluate_hand(
-            hero_hand + board
+            hero_hand
+            + board
         )
 
+
         opponent_score = evaluate_hand(
-            opponent_hand + board
+            opponent_hand
+            + board
         )
 
 
         if hero_score > opponent_score:
 
             equity_total += 1
+
 
         elif hero_score == opponent_score:
 
@@ -799,7 +940,7 @@ def estimate_class_equity(
 
 
 # ============================================================
-# BUILD OR LOAD HAND STRENGTH MODEL
+# LOAD OR BUILD BASELINE HAND STRENGTH MODEL
 # ============================================================
 
 baseline_simulations_run = 0
@@ -810,9 +951,11 @@ if os.path.exists(
 ):
 
     print()
+
     print(
         "Loading cached hand strength model..."
     )
+
 
     with open(
         HAND_STRENGTH_CACHE,
@@ -827,11 +970,14 @@ if os.path.exists(
 else:
 
     print()
+
     print(
         "Building baseline strength model..."
     )
 
+
     hand_strengths = {}
+
 
     baseline_start = (
         time.perf_counter()
@@ -850,6 +996,7 @@ else:
             )
         )
 
+
         hand_strengths[
             hand_class
         ] = equity
@@ -860,7 +1007,10 @@ else:
             "/",
             len(hand_classes),
             hand_class,
-            equity * 100,
+            round(
+                equity * 100,
+                2
+            ),
             "%"
         )
 
@@ -868,6 +1018,7 @@ else:
     baseline_end = (
         time.perf_counter()
     )
+
 
     baseline_simulations_run = (
         len(hand_classes)
@@ -887,16 +1038,20 @@ else:
 
 
     print()
+
     print(
         "Baseline model runtime:",
-        baseline_end
-        - baseline_start,
+        round(
+            baseline_end
+            - baseline_start,
+            2
+        ),
         "seconds"
     )
 
 
 # ============================================================
-# HERO HAND
+# HERO HAND INPUT
 # ============================================================
 
 while True:
@@ -947,7 +1102,9 @@ while True:
 # PLAYER STAT INPUT
 # ============================================================
 
-def get_percentage(prompt):
+def get_percentage(
+    prompt
+):
 
     while True:
 
@@ -956,6 +1113,7 @@ def get_percentage(prompt):
             value = float(
                 input(prompt)
             )
+
 
             if (
                 0
@@ -967,9 +1125,11 @@ def get_percentage(prompt):
                     value / 100
                 )
 
+
             print(
                 "Enter a value from 0 to 100."
             )
+
 
         except ValueError:
 
@@ -981,15 +1141,15 @@ def get_percentage(prompt):
 while True:
 
     vpip = get_percentage(
-        "Opponent VPIP percentage: "
+        "Modeled opponent VPIP percentage: "
     )
 
     pfr = get_percentage(
-        "Opponent PFR percentage: "
+        "Modeled opponent PFR percentage: "
     )
 
     three_bet = get_percentage(
-        "Opponent 3 bet percentage: "
+        "Modeled opponent 3 bet percentage: "
     )
 
 
@@ -999,9 +1159,9 @@ while True:
 
 
     print()
+
     print(
-        "PFR should not exceed VPIP. "
-        "Enter the statistics again."
+        "PFR should not exceed VPIP."
     )
 
 
@@ -1015,9 +1175,11 @@ while True:
             )
         )
 
+
         if observed_hands > 0:
 
             break
+
 
     except ValueError:
 
@@ -1046,7 +1208,7 @@ valid_positions = [
 while True:
 
     position = input(
-        "Opponent position "
+        "Modeled opponent position "
         "(UTG, HJ, CO, BTN, SB, BB): "
     ).upper()
 
@@ -1075,7 +1237,7 @@ valid_actions = [
 while True:
 
     observed_action = input(
-        "Opponent action "
+        "Modeled opponent action "
         "(RAISE, CALL, 3BET): "
     ).upper().replace(
         " ",
@@ -1094,10 +1256,7 @@ while True:
 
 
 # ============================================================
-# HEURISTIC POSITION ADJUSTMENTS
-#
-# THESE ARE MODEL ASSUMPTIONS.
-# THEY ARE NOT CLAIMED TO BE GTO FREQUENCIES.
+# POSITION ADJUSTMENTS
 # ============================================================
 
 VPIP_POSITION_FACTOR = {
@@ -1109,7 +1268,6 @@ VPIP_POSITION_FACTOR = {
     "BB": 1.35
 }
 
-
 PFR_POSITION_FACTOR = {
     "UTG": 0.65,
     "HJ": 0.82,
@@ -1118,7 +1276,6 @@ PFR_POSITION_FACTOR = {
     "SB": 1.15,
     "BB": 0.80
 }
-
 
 THREEBET_POSITION_FACTOR = {
     "UTG": 0.80,
@@ -1196,7 +1353,7 @@ def adjust_rates_for_position(
 
 
 # ============================================================
-# AVAILABLE HAND COMBOS AFTER HERO BLOCKERS
+# AVAILABLE COMBOS AFTER HERO BLOCKERS
 # ============================================================
 
 available_combos = {}
@@ -1213,13 +1370,17 @@ for hand_class in hand_classes:
         )
     )
 
+
     available_combos[
         hand_class
     ] = combos
 
+
     combo_counts[
         hand_class
-    ] = len(combos)
+    ] = len(
+        combos
+    )
 
 
 # ============================================================
@@ -1239,7 +1400,11 @@ def sigmoid(x):
             )
         )
 
-    exp_x = math.exp(x)
+
+    exp_x = (
+        math.exp(x)
+    )
+
 
     return (
         exp_x
@@ -1250,10 +1415,6 @@ def sigmoid(x):
         )
     )
 
-
-# ============================================================
-# FIND LOGISTIC THRESHOLD THAT MATCHES A TARGET FREQUENCY
-# ============================================================
 
 def calibrate_threshold(
     target_frequency,
@@ -1285,11 +1446,13 @@ def calibrate_threshold(
                 ]
             )
 
+
             strength = (
                 hand_strengths[
                     hand_class
                 ]
             )
+
 
             probability = sigmoid(
                 slope
@@ -1305,7 +1468,10 @@ def calibrate_threshold(
                 * count
             )
 
-            combination_total += count
+
+            combination_total += (
+                count
+            )
 
 
         current_frequency = (
@@ -1313,8 +1479,6 @@ def calibrate_threshold(
             / combination_total
         )
 
-
-        # HIGHER THRESHOLD MEANS FEWER HANDS ACT
 
         if (
             current_frequency
@@ -1333,10 +1497,6 @@ def calibrate_threshold(
     ) / 2
 
 
-# ============================================================
-# BUILD ACTION LIKELIHOOD FOR ALL 169 HANDS
-# ============================================================
-
 def build_action_likelihoods(
     action,
     vpip_rate,
@@ -1348,7 +1508,9 @@ def build_action_likelihoods(
     likelihoods = {}
 
 
-    # RAISE MODEL
+    # --------------------------------------------------------
+    # RAISE
+    # --------------------------------------------------------
 
     if action == "RAISE":
 
@@ -1356,6 +1518,7 @@ def build_action_likelihoods(
             18
             * slope_scale
         )
+
 
         threshold = (
             calibrate_threshold(
@@ -1380,7 +1543,9 @@ def build_action_likelihoods(
             )
 
 
-    # CALL MODEL
+    # --------------------------------------------------------
+    # CALL
+    # --------------------------------------------------------
 
     elif action == "CALL":
 
@@ -1447,7 +1612,9 @@ def build_action_likelihoods(
             )
 
 
-    # 3 BET MODEL
+    # --------------------------------------------------------
+    # 3 BET
+    # --------------------------------------------------------
 
     elif action == "3BET":
 
@@ -1480,11 +1647,13 @@ def build_action_likelihoods(
             )
 
 
-    return likelihoods
+    return (
+        likelihoods
+    )
 
 
 # ============================================================
-# CENTRAL PLAYER MODEL
+# CENTRAL MODELED OPPONENT
 # ============================================================
 
 (
@@ -1511,12 +1680,6 @@ central_likelihoods = (
 
 # ============================================================
 # BAYESIAN RANGE UPDATE
-#
-# P(HAND | ACTION)
-# IS PROPORTIONAL TO
-# P(ACTION | HAND) * P(HAND)
-#
-# P(HAND) IS REPRESENTED BY AVAILABLE COMBO COUNT
 # ============================================================
 
 central_range_mass = {}
@@ -1535,18 +1698,24 @@ for hand_class in hand_classes:
         ]
     )
 
+
     central_range_mass[
         hand_class
     ] = mass
 
-    normalizing_constant += mass
+
+    normalizing_constant += (
+        mass
+    )
 
 
 for hand_class in hand_classes:
 
     central_range_mass[
         hand_class
-    ] /= normalizing_constant
+    ] /= (
+        normalizing_constant
+    )
 
 
 # ============================================================
@@ -1556,18 +1725,21 @@ for hand_class in hand_classes:
 sorted_range = sorted(
     hand_classes,
     key=lambda hand:
-        central_range_mass[hand],
+        central_range_mass[
+            hand
+        ],
     reverse=True
 )
 
 
 print()
+
 print(
     "========================================"
 )
 
 print(
-    "INFERRED OPPONENT RANGE"
+    "INFERRED MODELED OPPONENT RANGE"
 )
 
 print(
@@ -1590,19 +1762,28 @@ print()
 
 print(
     "Adjusted VPIP:",
-    adjusted_vpip * 100,
+    round(
+        adjusted_vpip * 100,
+        2
+    ),
     "%"
 )
 
 print(
     "Adjusted PFR:",
-    adjusted_pfr * 100,
+    round(
+        adjusted_pfr * 100,
+        2
+    ),
     "%"
 )
 
 print(
     "Adjusted 3 Bet:",
-    adjusted_three_bet * 100,
+    round(
+        adjusted_three_bet * 100,
+        2
+    ),
     "%"
 )
 
@@ -1624,14 +1805,20 @@ for index, hand_class in enumerate(
         index,
         hand_class,
         "| Action Likelihood:",
-        central_likelihoods[
-            hand_class
-        ] * 100,
+        round(
+            central_likelihoods[
+                hand_class
+            ] * 100,
+            2
+        ),
         "%",
         "| Range Mass:",
-        central_range_mass[
-            hand_class
-        ] * 100,
+        round(
+            central_range_mass[
+                hand_class
+            ] * 100,
+            3
+        ),
         "%"
     )
 
@@ -1650,9 +1837,11 @@ while True:
             )
         )
 
+
         if current_pot > 0:
 
             break
+
 
     except ValueError:
 
@@ -1674,9 +1863,11 @@ while True:
             )
         )
 
+
         if call_amount > 0:
 
             break
+
 
     except ValueError:
 
@@ -1713,6 +1904,7 @@ def sample_rate_from_beta(
         * sample_size
     )
 
+
     beta = (
         1
         + (
@@ -1730,15 +1922,23 @@ def sample_rate_from_beta(
 
 
 # ============================================================
-# DECISION FRAGILITY SIMULATION
+# SIX PLAYER DECISION FRAGILITY SIMULATION
+#
+# PLAYER 1: HERO
+# PLAYER 2: MODELED OPPONENT
+# PLAYERS 3-6: RANDOM OPPONENTS
 # ============================================================
 
 model_equities = []
+
 model_evs = []
+
 model_action_rates = []
 
 profitable_models = 0
 
+
+# Hero cards cannot appear anywhere else
 
 base_deck = [
     card
@@ -1757,8 +1957,9 @@ for model_number in range(
     NUMBER_OF_MODELS + 1
 ):
 
-
-    # SAMPLE PLAUSIBLE PLAYER STATISTICS
+    # --------------------------------------------------------
+    # SAMPLE PLAUSIBLE OPPONENT STATISTICS
+    # --------------------------------------------------------
 
     sampled_vpip = (
         sample_rate_from_beta(
@@ -1784,8 +1985,6 @@ for model_number in range(
     )
 
 
-    # PFR CANNOT EXCEED VPIP
-
     sampled_pfr = min(
         sampled_pfr,
         sampled_vpip
@@ -1804,11 +2003,15 @@ for model_number in range(
     )
 
 
-    # UNCERTAINTY IN RANGE SHAPE
+    # --------------------------------------------------------
+    # UNCERTAINTY ABOUT RANGE SHAPE
+    # --------------------------------------------------------
 
-    slope_scale = random.uniform(
-        0.85,
-        1.15
+    slope_scale = (
+        random.uniform(
+            0.85,
+            1.15
+        )
     )
 
 
@@ -1823,9 +2026,12 @@ for model_number in range(
     )
 
 
-    # BUILD PHYSICAL COMBO DISTRIBUTION
+    # --------------------------------------------------------
+    # BUILD WEIGHTED PHYSICAL COMBO POPULATION
+    # --------------------------------------------------------
 
     combo_population = []
+
     combo_weights = []
 
 
@@ -1846,6 +2052,7 @@ for model_number in range(
                 combo
             )
 
+
             combo_weights.append(
                 weight
             )
@@ -1863,17 +2070,20 @@ for model_number in range(
     )
 
 
+    # --------------------------------------------------------
+    # MONTE CARLO EQUITY
+    # --------------------------------------------------------
+
     equity_total = 0
 
-
-    # ========================================================
-    # MONTE CARLO UNDER THIS PLAUSIBLE OPPONENT MODEL
-    # ========================================================
 
     for simulation in range(
         TRIALS_PER_MODEL
     ):
 
+        # ====================================================
+        # MODELED OPPONENT
+        # ====================================================
 
         random_weight = (
             random.random()
@@ -1889,7 +2099,7 @@ for model_number in range(
         )
 
 
-        opponent_hand = (
+        modeled_opponent_hand = (
             combo_population[
                 combo_index
             ]
@@ -1901,12 +2111,47 @@ for model_number in range(
         )
 
 
-        for card in opponent_hand:
+        for card in modeled_opponent_hand:
 
             simulation_deck.remove(
                 card
             )
 
+
+        # ====================================================
+        # FOUR RANDOM OPPONENTS
+        # ====================================================
+
+        random_opponent_hands = []
+
+
+        for opponent_number in range(
+            RANDOM_OPPONENTS
+        ):
+
+            random_hand = (
+                random.sample(
+                    simulation_deck,
+                    2
+                )
+            )
+
+
+            random_opponent_hands.append(
+                random_hand
+            )
+
+
+            for card in random_hand:
+
+                simulation_deck.remove(
+                    card
+                )
+
+
+        # ====================================================
+        # COMMUNITY CARDS
+        # ====================================================
 
         board = random.sample(
             simulation_deck,
@@ -1914,29 +2159,105 @@ for model_number in range(
         )
 
 
-        hero_score = evaluate_hand(
-            hero_hand + board
+        # ====================================================
+        # HERO SCORE
+        # ====================================================
+
+        hero_score = (
+            evaluate_hand(
+                hero_hand
+                + board
+            )
         )
 
 
-        opponent_score = evaluate_hand(
-            opponent_hand + board
+        # ====================================================
+        # MODELED OPPONENT SCORE
+        # ====================================================
+
+        modeled_opponent_score = (
+            evaluate_hand(
+                modeled_opponent_hand
+                + board
+            )
         )
 
 
-        if hero_score > opponent_score:
-
-            equity_total += 1
-
-
-        elif hero_score == opponent_score:
-
-            equity_total += 0.5
+        opponent_scores = [
+            modeled_opponent_score
+        ]
 
 
-    # ========================================================
-    # MODEL EQUITY
-    # ========================================================
+        # ====================================================
+        # RANDOM OPPONENT SCORES
+        # ====================================================
+
+        for random_hand in random_opponent_hands:
+
+            random_opponent_score = (
+                evaluate_hand(
+                    random_hand
+                    + board
+                )
+            )
+
+
+            opponent_scores.append(
+                random_opponent_score
+            )
+
+
+        # ====================================================
+        # MULTIWAY POT EQUITY
+        # ====================================================
+
+        all_scores = (
+            [hero_score]
+            + opponent_scores
+        )
+
+
+        best_score = max(
+            all_scores
+        )
+
+
+        # Somebody beats Hero
+
+        if hero_score < best_score:
+
+            hero_equity_share = 0
+
+
+        else:
+
+            # Hero tied for best hand.
+            # Count number of players sharing the pot.
+
+            number_of_winners = 0
+
+
+            for score in all_scores:
+
+                if score == best_score:
+
+                    number_of_winners += 1
+
+
+            hero_equity_share = (
+                1
+                / number_of_winners
+            )
+
+
+        equity_total += (
+            hero_equity_share
+        )
+
+
+    # --------------------------------------------------------
+    # EQUITY FOR THIS PLAUSIBLE MODEL
+    # --------------------------------------------------------
 
     model_equity = (
         equity_total
@@ -1944,11 +2265,12 @@ for model_number in range(
     )
 
 
-    # ========================================================
-    # CALL EV
+    # --------------------------------------------------------
+    # EXPECTED VALUE OF CALL
     #
-    # EV = EQUITY * (POT + CALL) - CALL
-    # ========================================================
+    # Assumes current_pot is the total pot Hero can win
+    # before Hero contributes the call.
+    # --------------------------------------------------------
 
     model_ev = (
         model_equity
@@ -1964,16 +2286,22 @@ for model_number in range(
         model_equity
     )
 
+
     model_evs.append(
         model_ev
     )
 
+
+    # --------------------------------------------------------
+    # MODELED OPPONENT ACTION RATE
+    # --------------------------------------------------------
 
     if observed_action == "RAISE":
 
         model_action_rate = (
             model_pfr
         )
+
 
     elif observed_action == "CALL":
 
@@ -1982,6 +2310,7 @@ for model_number in range(
             - model_pfr,
             0
         )
+
 
     else:
 
@@ -1995,6 +2324,10 @@ for model_number in range(
     )
 
 
+    # --------------------------------------------------------
+    # IS CALL PROFITABLE UNDER THIS MODEL?
+    # --------------------------------------------------------
+
     if model_ev > 0:
 
         profitable_models += 1
@@ -2005,11 +2338,17 @@ for model_number in range(
         model_number,
         "/",
         NUMBER_OF_MODELS,
-        "| Equity:",
-        model_equity * 100,
+        "| Six Player Equity:",
+        round(
+            model_equity * 100,
+            2
+        ),
         "%",
         "| EV:",
-        model_ev
+        round(
+            model_ev,
+            2
+        )
     )
 
 
@@ -2119,7 +2458,7 @@ print(
 )
 
 print(
-    "DECISION FRAGILITY RESULTS"
+    "SIX PLAYER DECISION FRAGILITY RESULTS"
 )
 
 print(
@@ -2133,13 +2472,25 @@ print(
     hero_hand
 )
 
+print()
+
 print(
-    "Opponent Position:",
+    "Table Model:"
+)
+
+print(
+    "Hero + 1 inferred opponent + 4 random opponents"
+)
+
+print()
+
+print(
+    "Modeled Opponent Position:",
     position
 )
 
 print(
-    "Observed Action:",
+    "Modeled Opponent Action:",
     observed_action
 )
 
@@ -2147,7 +2498,10 @@ print()
 
 print(
     "Break Even Equity:",
-    break_even_equity * 100,
+    round(
+        break_even_equity * 100,
+        2
+    ),
     "%"
 )
 
@@ -2155,19 +2509,28 @@ print()
 
 print(
     "Average Hero Equity:",
-    average_equity * 100,
+    round(
+        average_equity * 100,
+        2
+    ),
     "%"
 )
 
 print(
     "Minimum Hero Equity:",
-    minimum_equity * 100,
+    round(
+        minimum_equity * 100,
+        2
+    ),
     "%"
 )
 
 print(
     "Maximum Hero Equity:",
-    maximum_equity * 100,
+    round(
+        maximum_equity * 100,
+        2
+    ),
     "%"
 )
 
@@ -2175,10 +2538,16 @@ print()
 
 print(
     "Approximate 90% Model Equity Interval:",
-    lower_equity * 100,
+    round(
+        lower_equity * 100,
+        2
+    ),
     "%",
     "to",
-    upper_equity * 100,
+    round(
+        upper_equity * 100,
+        2
+    ),
     "%"
 )
 
@@ -2186,17 +2555,26 @@ print()
 
 print(
     "Average Call EV:",
-    average_ev
+    round(
+        average_ev,
+        2
+    )
 )
 
 print(
     "Minimum Call EV:",
-    minimum_ev
+    round(
+        minimum_ev,
+        2
+    )
 )
 
 print(
     "Maximum Call EV:",
-    maximum_ev
+    round(
+        maximum_ev,
+        2
+    )
 )
 
 print()
@@ -2210,7 +2588,10 @@ print(
 
 print(
     "Call Profitable Across Models:",
-    profitable_fraction * 100,
+    round(
+        profitable_fraction * 100,
+        2
+    ),
     "%"
 )
 
@@ -2218,7 +2599,10 @@ print()
 
 print(
     "Decision Fragility Score:",
-    fragility_score * 100,
+    round(
+        fragility_score * 100,
+        2
+    ),
     "%"
 )
 
@@ -2226,31 +2610,12 @@ print()
 
 print(
     "Decision Simulation Runtime:",
-    decision_end
-    - decision_start,
+    round(
+        decision_end
+        - decision_start,
+        2
+    ),
     "seconds"
-)
-
-print()
-
-print(
-    "Baseline Simulations Run:",
-    baseline_simulations_run
-)
-
-print(
-    "Decision Simulations:",
-    NUMBER_OF_MODELS
-    * TRIALS_PER_MODEL
-)
-
-print(
-    "Total Simulations This Run:",
-    baseline_simulations_run
-    + (
-        NUMBER_OF_MODELS
-        * TRIALS_PER_MODEL
-    )
 )
 
 
@@ -2284,12 +2649,15 @@ with open(
         writer.writerow(
             [
                 hand_class,
+
                 hand_strengths[
                     hand_class
                 ],
+
                 central_likelihoods[
                     hand_class
                 ],
+
                 central_range_mass[
                     hand_class
                 ]
@@ -2298,7 +2666,7 @@ with open(
 
 
 # ============================================================
-# SAVE DECISION FRAGILITY MODELS
+# SAVE DECISION MODELS
 # ============================================================
 
 with open(
@@ -2315,7 +2683,7 @@ with open(
     writer.writerow(
         [
             "Model",
-            "Equity",
+            "Six Player Equity",
             "Call EV",
             "Profitable",
             "Estimated Action Rate"
@@ -2330,17 +2698,21 @@ with open(
         writer.writerow(
             [
                 index + 1,
+
                 model_equities[
                     index
                 ],
+
                 model_evs[
                     index
                 ],
+
                 (
                     model_evs[
                         index
                     ] > 0
                 ),
+
                 model_action_rates[
                     index
                 ]
@@ -2362,6 +2734,7 @@ model_numbers = list(
 
 
 equity_percentages = []
+
 
 for equity in model_equities:
 
@@ -2389,17 +2762,17 @@ plt.axhline(
 
 
 plt.xlabel(
-    "Plausible Opponent Model"
+    "Plausible Modeled Opponent"
 )
 
 
 plt.ylabel(
-    "Hero Equity (%)"
+    "Hero Six Player Equity (%)"
 )
 
 
 plt.title(
-    "Decision Fragility Under Opponent Model Uncertainty"
+    "Decision Fragility in a Six Player Pot"
 )
 
 
@@ -2412,7 +2785,7 @@ plt.show()
 
 # ============================================================
 # GRAPH 2
-# TOP 20 INFERRED HAND CLASSES
+# MODELED OPPONENT POSTERIOR RANGE
 # ============================================================
 
 top_20 = (
@@ -2444,7 +2817,7 @@ plt.bar(
 
 
 plt.xlabel(
-    "Opponent Starting Hand Class"
+    "Modeled Opponent Starting Hand"
 )
 
 
@@ -2454,7 +2827,7 @@ plt.ylabel(
 
 
 plt.title(
-    "Most Likely Opponent Holdings After Observed Action"
+    "Most Likely Holdings for the Modeled Opponent"
 )
 
 
@@ -2471,6 +2844,10 @@ plt.grid(
 plt.show()
 
 
+# ============================================================
+# FINAL NOTES
+# ============================================================
+
 print()
 
 print(
@@ -2484,10 +2861,29 @@ print(
 print()
 
 print(
+    "Simulation structure:"
+)
+
+print(
+    "1 modeled opponent uses inferred range."
+)
+
+print(
+    "4 additional opponents receive uniformly random hands."
+)
+
+print()
+
+print(
     "Important: this is a probabilistic research prototype."
 )
 
 print(
-    "The position multipliers and logistic action model are "
-    "model assumptions, not solver derived GTO ranges."
+    "Position multipliers and logistic action probabilities "
+    "are heuristic model assumptions, not solver-derived GTO ranges."
+)
+
+print(
+    "The four additional opponents are currently modeled as "
+    "uniform random hands rather than action-conditioned ranges."
 )
