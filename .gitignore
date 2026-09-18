@@ -220,3 +220,6 @@ __marimo__/
 # Output Files
 *.csv
 *.json
+
+# UN Ignore
+*.un*
