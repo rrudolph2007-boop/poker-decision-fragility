@@ -10,10 +10,11 @@ from itertools import accumulate
 
 import matplotlib.pyplot as plt
 
-
 # ============================================================
 # PROJECT SETTINGS
 # ============================================================
+
+RANDOM_SEED = 42
 
 BASELINE_TRIALS_PER_CLASS = 1000
 
@@ -22,6 +23,8 @@ TRIALS_PER_MODEL = 6000
 
 # One modeled opponent + four random opponents + Hero = 6 players
 RANDOM_OPPONENTS = 4
+
+random.seed(RANDOM_SEED)
 
 HAND_STRENGTH_CACHE = (
     "hand_strengths_"
