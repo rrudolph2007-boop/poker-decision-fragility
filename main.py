@@ -1,11 +1,11 @@
-import bisect
 import csv
 import random
-import time
-
-from itertools import accumulate
 
 import matplotlib.pyplot as plt
+
+from models.fragility import (
+    run_decision_fragility_simulation,
+)
 
 from models.opponent_model import (
     adjust_rates_for_position,
@@ -14,7 +14,6 @@ from models.opponent_model import (
 
 from poker.cards import full_deck
 from poker.equity import load_or_build_hand_strengths
-from poker.evaluator import evaluate_hand
 from poker.hands import (
     generate_class_combos,
     hand_classes,
@@ -53,7 +52,9 @@ def get_percentage(
     Request a percentage from the user and convert it to a decimal.
 
     Example:
-        25 becomes 0.25
+
+        User enters 25
+        Function returns 0.25
     """
 
     while True:
@@ -63,6 +64,7 @@ def get_percentage(
             value = float(
                 input(prompt)
             )
+
 
             if (
                 0
@@ -74,9 +76,11 @@ def get_percentage(
                     value / 100
                 )
 
+
             print(
                 "Enter a value from 0 to 100."
             )
+
 
         except ValueError:
 
@@ -86,50 +90,13 @@ def get_percentage(
 
 
 # ============================================================
-# BETA UNCERTAINTY MODEL
-# ============================================================
-
-def sample_rate_from_beta(
-    estimated_rate,
-    sample_size,
-):
-    """
-    Sample a plausible version of an observed player statistic.
-
-    A smaller sample of observed hands creates more uncertainty.
-    A larger sample creates a tighter distribution around the
-    observed statistic.
-    """
-
-    alpha = (
-        1
-        + estimated_rate
-        * sample_size
-    )
-
-    beta = (
-        1
-        + (
-            1
-            - estimated_rate
-        )
-        * sample_size
-    )
-
-    return random.betavariate(
-        alpha,
-        beta,
-    )
-
-
-# ============================================================
 # MAIN PROGRAM
 # ============================================================
 
 def main():
 
-    # Use a fixed seed so identical inputs produce reproducible
-    # Monte Carlo results during development and testing.
+    # Use a fixed random seed during development so identical
+    # inputs produce reproducible simulations.
 
     random.seed(
         RANDOM_SEED
@@ -341,7 +308,7 @@ def main():
 
 
     # ========================================================
-    # AVAILABLE HAND COMBINATIONS AFTER HERO BLOCKERS
+    # AVAILABLE COMBINATIONS AFTER HERO BLOCKERS
     # ========================================================
 
     available_combos = {}
@@ -351,9 +318,11 @@ def main():
 
     for hand_class in hand_classes:
 
-        combos = generate_class_combos(
-            hand_class,
-            hero_hand,
+        combos = (
+            generate_class_combos(
+                hand_class,
+                hero_hand,
+            )
         )
 
 
@@ -370,12 +339,8 @@ def main():
 
 
     # ========================================================
-    # CENTRAL MODELED OPPONENT
+    # CENTRAL OPPONENT MODEL
     # ========================================================
-
-    # The implementation of position adjustment now lives in:
-    #
-    # models/opponent_model.py
 
     (
         adjusted_vpip,
@@ -388,9 +353,6 @@ def main():
         position,
     )
 
-
-    # The logistic action model and threshold calibration also
-    # live in models/opponent_model.py.
 
     central_likelihoods = (
         build_action_likelihoods(
@@ -416,12 +378,11 @@ def main():
 
     for hand_class in hand_classes:
 
-        # Prior range probability is proportional to the number
-        # of available physical combinations for the hand class.
+        # Prior mass is proportional to the number of remaining
+        # physical combinations of the hand class.
         #
-        # The action likelihood then increases or decreases that
-        # probability depending on how likely the opponent would
-        # be to take the observed action with that hand.
+        # Multiplying by P(action | hand) produces an
+        # unnormalized posterior mass.
 
         mass = (
             combo_counts[
@@ -443,8 +404,7 @@ def main():
         )
 
 
-    # Convert the unnormalized masses into probabilities that
-    # sum to 1.
+    # Normalize so the posterior masses sum to 1.
 
     for hand_class in hand_classes:
 
@@ -623,557 +583,150 @@ def main():
         )
 
 
-    # Minimum equity Hero needs for the call to break even.
+    # ========================================================
+    # RUN DECISION FRAGILITY ENGINE
+    # ========================================================
+
+    # The Monte Carlo simulation, uncertainty sampling,
+    # multiway equity calculation, EV calculation, and
+    # Decision Fragility calculation now live entirely in:
+    #
+    # models/fragility.py
+
+    results = (
+        run_decision_fragility_simulation(
+            hero_hand=hero_hand,
+            vpip=vpip,
+            pfr=pfr,
+            three_bet=three_bet,
+            observed_hands=observed_hands,
+            position=position,
+            observed_action=observed_action,
+            current_pot=current_pot,
+            call_amount=call_amount,
+            hand_classes=hand_classes,
+            hand_strengths=hand_strengths,
+            available_combos=available_combos,
+            combo_counts=combo_counts,
+            number_of_models=NUMBER_OF_MODELS,
+            trials_per_model=TRIALS_PER_MODEL,
+            random_opponents=RANDOM_OPPONENTS,
+        )
+    )
+
+
+    # ========================================================
+    # EXTRACT RESULTS
+    # ========================================================
 
     break_even_equity = (
-        call_amount
-        /
-        (
-            current_pot
-            + call_amount
-        )
+        results[
+            "break_even_equity"
+        ]
     )
 
 
-    # ========================================================
-    # SIX-PLAYER DECISION FRAGILITY SIMULATION
-    # ========================================================
-
-    model_equities = []
-
-    model_evs = []
-
-    model_action_rates = []
-
-    profitable_models = 0
-
-
-    # Hero's two known cards can never appear in an opponent
-    # hand or on the board.
-
-    base_deck = [
-        card
-        for card in full_deck
-        if card not in hero_hand
-    ]
-
-
-    decision_start = (
-        time.perf_counter()
+    model_equities = (
+        results[
+            "model_equities"
+        ]
     )
 
 
-    for model_number in range(
-        1,
-        NUMBER_OF_MODELS + 1,
-    ):
-
-        # ----------------------------------------------------
-        # SAMPLE PLAUSIBLE PLAYER STATISTICS
-        # ----------------------------------------------------
-
-        sampled_vpip = (
-            sample_rate_from_beta(
-                vpip,
-                observed_hands,
-            )
-        )
-
-
-        sampled_pfr = (
-            sample_rate_from_beta(
-                pfr,
-                observed_hands,
-            )
-        )
-
-
-        sampled_three_bet = (
-            sample_rate_from_beta(
-                three_bet,
-                observed_hands,
-            )
-        )
-
-
-        # PFR cannot logically exceed VPIP.
-
-        sampled_pfr = min(
-            sampled_pfr,
-            sampled_vpip,
-        )
-
-
-        (
-            model_vpip,
-            model_pfr,
-            model_three_bet,
-        ) = adjust_rates_for_position(
-            sampled_vpip,
-            sampled_pfr,
-            sampled_three_bet,
-            position,
-        )
-
-
-        # Introduce uncertainty about the exact shape of the
-        # opponent's action-probability curve.
-
-        slope_scale = (
-            random.uniform(
-                0.85,
-                1.15,
-            )
-        )
-
-
-        model_likelihoods = (
-            build_action_likelihoods(
-                observed_action,
-                model_vpip,
-                model_pfr,
-                model_three_bet,
-                hand_classes,
-                hand_strengths,
-                combo_counts,
-                slope_scale,
-            )
-        )
-
-
-        # ----------------------------------------------------
-        # BUILD WEIGHTED MODELED-OPPONENT RANGE
-        # ----------------------------------------------------
-
-        combo_population = []
-
-        combo_weights = []
-
-
-        for hand_class in hand_classes:
-
-            weight = (
-                model_likelihoods[
-                    hand_class
-                ]
-            )
-
-
-            for combo in available_combos[
-                hand_class
-            ]:
-
-                combo_population.append(
-                    combo
-                )
-
-
-                combo_weights.append(
-                    weight
-                )
-
-
-        # Cumulative weights allow efficient weighted sampling
-        # using binary search.
-
-        cumulative_weights = list(
-            accumulate(
-                combo_weights
-            )
-        )
-
-
-        total_weight = (
-            cumulative_weights[-1]
-        )
-
-
-        equity_total = 0
-
-
-        # ----------------------------------------------------
-        # MONTE CARLO TRIALS FOR THIS PLAUSIBLE MODEL
-        # ----------------------------------------------------
-
-        for simulation in range(
-            TRIALS_PER_MODEL
-        ):
-
-            # ------------------------------------------------
-            # SAMPLE THE MODELED OPPONENT
-            # ------------------------------------------------
-
-            random_weight = (
-                random.random()
-                * total_weight
-            )
-
-
-            combo_index = (
-                bisect.bisect_left(
-                    cumulative_weights,
-                    random_weight,
-                )
-            )
-
-
-            modeled_opponent_hand = (
-                combo_population[
-                    combo_index
-                ]
-            )
-
-
-            simulation_deck = (
-                base_deck.copy()
-            )
-
-
-            for card in modeled_opponent_hand:
-
-                simulation_deck.remove(
-                    card
-                )
-
-
-            # ------------------------------------------------
-            # DEAL FOUR ADDITIONAL RANDOM OPPONENTS
-            # ------------------------------------------------
-
-            random_opponent_hands = []
-
-
-            for opponent_number in range(
-                RANDOM_OPPONENTS
-            ):
-
-                random_hand = (
-                    random.sample(
-                        simulation_deck,
-                        2,
-                    )
-                )
-
-
-                random_opponent_hands.append(
-                    random_hand
-                )
-
-
-                # Remove the dealt cards so no physical card can
-                # be dealt to more than one player.
-
-                for card in random_hand:
-
-                    simulation_deck.remove(
-                        card
-                    )
-
-
-            # ------------------------------------------------
-            # DEAL COMMUNITY CARDS
-            # ------------------------------------------------
-
-            board = random.sample(
-                simulation_deck,
-                5,
-            )
-
-
-            # ------------------------------------------------
-            # EVALUATE HERO
-            # ------------------------------------------------
-
-            hero_score = (
-                evaluate_hand(
-                    hero_hand
-                    + board
-                )
-            )
-
-
-            # ------------------------------------------------
-            # EVALUATE MODELED OPPONENT
-            # ------------------------------------------------
-
-            modeled_opponent_score = (
-                evaluate_hand(
-                    modeled_opponent_hand
-                    + board
-                )
-            )
-
-
-            opponent_scores = [
-                modeled_opponent_score
-            ]
-
-
-            # ------------------------------------------------
-            # EVALUATE FOUR RANDOM OPPONENTS
-            # ------------------------------------------------
-
-            for random_hand in random_opponent_hands:
-
-                random_opponent_score = (
-                    evaluate_hand(
-                        random_hand
-                        + board
-                    )
-                )
-
-
-                opponent_scores.append(
-                    random_opponent_score
-                )
-
-
-            # ------------------------------------------------
-            # MULTIWAY EQUITY
-            # ------------------------------------------------
-
-            all_scores = (
-                [hero_score]
-                + opponent_scores
-            )
-
-
-            best_score = max(
-                all_scores
-            )
-
-
-            # If another player has a stronger hand,
-            # Hero receives no share of the pot.
-
-            if hero_score < best_score:
-
-                hero_equity_share = 0
-
-
-            else:
-
-                # Hero has the best hand, but multiple players
-                # may have tied for that same best hand.
-
-                number_of_winners = 0
-
-
-                for score in all_scores:
-
-                    if score == best_score:
-
-                        number_of_winners += 1
-
-
-                # Examples:
-                #
-                # Hero wins alone       -> 1
-                # Hero ties one player  -> 1/2
-                # Hero ties two players -> 1/3
-
-                hero_equity_share = (
-                    1
-                    / number_of_winners
-                )
-
-
-            equity_total += (
-                hero_equity_share
-            )
-
-
-        # ----------------------------------------------------
-        # EQUITY FOR THIS PLAUSIBLE OPPONENT MODEL
-        # ----------------------------------------------------
-
-        model_equity = (
-            equity_total
-            / TRIALS_PER_MODEL
-        )
-
-
-        # ----------------------------------------------------
-        # EXPECTED VALUE OF CALL
-        # ----------------------------------------------------
-
-        model_ev = (
-            model_equity
-            * (
-                current_pot
-                + call_amount
-            )
-            - call_amount
-        )
-
-
-        model_equities.append(
-            model_equity
-        )
-
-
-        model_evs.append(
-            model_ev
-        )
-
-
-        # ----------------------------------------------------
-        # STORE ACTION RATE FOR OUTPUT
-        # ----------------------------------------------------
-
-        if observed_action == "RAISE":
-
-            model_action_rate = (
-                model_pfr
-            )
-
-
-        elif observed_action == "CALL":
-
-            model_action_rate = max(
-                model_vpip
-                - model_pfr,
-                0,
-            )
-
-
-        else:
-
-            model_action_rate = (
-                model_three_bet
-            )
-
-
-        model_action_rates.append(
-            model_action_rate
-        )
-
-
-        # Decision Fragility ultimately depends on whether each
-        # plausible model considers calling profitable.
-
-        if model_ev > 0:
-
-            profitable_models += 1
-
-
-        print(
-            "Model",
-            model_number,
-            "/",
-            NUMBER_OF_MODELS,
-            "| Six Player Equity:",
-            round(
-                model_equity * 100,
-                2,
-            ),
-            "%",
-            "| EV:",
-            round(
-                model_ev,
-                2,
-            ),
-        )
-
-
-    decision_end = (
-        time.perf_counter()
+    model_evs = (
+        results[
+            "model_evs"
+        ]
     )
 
 
-    # ========================================================
-    # DECISION FRAGILITY
-    # ========================================================
+    model_action_rates = (
+        results[
+            "model_action_rates"
+        ]
+    )
+
+
+    profitable_models = (
+        results[
+            "profitable_models"
+        ]
+    )
+
 
     profitable_fraction = (
-        profitable_models
-        / NUMBER_OF_MODELS
+        results[
+            "profitable_fraction"
+        ]
     )
 
-
-    # q = fraction of models where calling has positive EV.
-    #
-    # F = 1 - |2q - 1|
-    #
-    # F = 0 when all models agree.
-    # F = 1 when the models split 50/50.
 
     fragility_score = (
-        1
-        - abs(
-            2
-            * profitable_fraction
-            - 1
-        )
+        results[
+            "fragility_score"
+        ]
     )
 
-
-    # ========================================================
-    # SUMMARY STATISTICS
-    # ========================================================
 
     average_equity = (
-        sum(model_equities)
-        / len(model_equities)
+        results[
+            "average_equity"
+        ]
     )
 
 
-    minimum_equity = min(
-        model_equities
+    minimum_equity = (
+        results[
+            "minimum_equity"
+        ]
     )
 
 
-    maximum_equity = max(
-        model_equities
+    maximum_equity = (
+        results[
+            "maximum_equity"
+        ]
     )
 
 
     average_ev = (
-        sum(model_evs)
-        / len(model_evs)
+        results[
+            "average_ev"
+        ]
     )
 
 
-    minimum_ev = min(
-        model_evs
+    minimum_ev = (
+        results[
+            "minimum_ev"
+        ]
     )
 
 
-    maximum_ev = max(
-        model_evs
-    )
-
-
-    sorted_equities = sorted(
-        model_equities
-    )
-
-
-    lower_index = int(
-        0.05
-        * len(sorted_equities)
-    )
-
-
-    upper_index = (
-        int(
-            0.95
-            * len(sorted_equities)
-        )
-        - 1
+    maximum_ev = (
+        results[
+            "maximum_ev"
+        ]
     )
 
 
     lower_equity = (
-        sorted_equities[
-            lower_index
+        results[
+            "lower_equity"
         ]
     )
 
 
     upper_equity = (
-        sorted_equities[
-            upper_index
+        results[
+            "upper_equity"
+        ]
+    )
+
+
+    decision_runtime = (
+        results[
+            "simulation_runtime"
         ]
     )
 
@@ -1368,8 +921,7 @@ def main():
     print(
         "Decision Simulation Runtime:",
         round(
-            decision_end
-            - decision_start,
+            decision_runtime,
             2,
         ),
         "seconds",

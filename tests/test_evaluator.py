@@ -1,4 +1,3 @@
-from main import evaluate_hand
 from poker.evaluator import evaluate_hand
 
 def test_straight_flush():
