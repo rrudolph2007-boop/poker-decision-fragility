@@ -19,27 +19,14 @@ from poker.hands import (
     hand_classes,
 )
 
-
-# ============================================================
-# PROJECT SETTINGS
-# ============================================================
-
-RANDOM_SEED = 42
-
-BASELINE_TRIALS_PER_CLASS = 1000
-
-NUMBER_OF_MODELS = 50
-TRIALS_PER_MODEL = 6000
-
-# Hero + 1 modeled opponent + 4 random opponents = 6 players
-RANDOM_OPPONENTS = 4
-
-HAND_STRENGTH_CACHE = (
-    "hand_strengths_"
-    + str(BASELINE_TRIALS_PER_CLASS)
-    + ".json"
+from config import (
+    BASELINE_TRIALS_PER_CLASS,
+    HAND_STRENGTH_CACHE,
+    NUMBER_OF_MODELS,
+    RANDOM_OPPONENTS,
+    RANDOM_SEED,
+    TRIALS_PER_MODEL,
 )
-
 
 # ============================================================
 # USER INPUT HELPERS

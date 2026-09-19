@@ -9,16 +9,16 @@ For each plausible opponent model, the simulation:
 1. Samples plausible VPIP, PFR, and 3-bet statistics.
 2. Builds an uncertain range for the modeled opponent.
 3. Samples the modeled opponent from that range.
-4. Deals four additional opponents uniformly random hands.
+4. Deals additional opponents uniformly random hands.
 5. Deals a five-card board.
 6. Calculates Hero's multiway equity.
 7. Calculates the expected value of calling.
 8. Records whether the call is profitable.
 
-Decision Fragility measures disagreement across the plausible models.
+Decision Fragility measures disagreement across plausible models.
 
 A fragility score near 0 means the models mostly agree.
-A fragility score near 1 means the models are divided about the decision.
+A fragility score near 1 means the models are divided.
 """
 
 
@@ -27,6 +27,13 @@ import random
 import time
 
 from itertools import accumulate
+
+from config import (
+    BETA_PRIOR_ALPHA,
+    BETA_PRIOR_BETA,
+    SLOPE_SCALE_MAX,
+    SLOPE_SCALE_MIN,
+)
 
 from models.opponent_model import (
     adjust_rates_for_position,
@@ -48,34 +55,25 @@ def sample_rate_from_beta(
     """
     Sample a plausible version of an observed player statistic.
 
-    The Beta distribution represents uncertainty about statistics
+    The Beta distribution represents uncertainty around statistics
     such as VPIP, PFR, and 3-bet frequency.
 
-    A small number of observed hands produces a wider distribution,
-    representing greater uncertainty.
+    Smaller observed samples produce more variation.
 
-    A large number of observed hands produces a tighter distribution
-    around the observed statistic.
+    Larger observed samples produce values more tightly clustered
+    around the observed rate.
 
-    Example:
-
-        VPIP = 0.30
-        observed hands = 20
-
-    will produce much more variation than:
-
-        VPIP = 0.30
-        observed hands = 5000
+    The prior parameters are defined in config.py.
     """
 
     alpha = (
-        1
+        BETA_PRIOR_ALPHA
         + estimated_rate
         * sample_size
     )
 
     beta = (
-        1
+        BETA_PRIOR_BETA
         + (
             1
             - estimated_rate
@@ -100,18 +98,15 @@ def build_weighted_combo_population(
 ):
     """
     Convert hand-class action likelihoods into a weighted population
-    of actual two-card combinations.
+    of actual physical two-card combinations.
 
     Example:
 
-        AKs represents four physical combinations.
-        AKo represents twelve physical combinations.
+        AKs has 4 physical combinations.
+        AKo has 12 physical combinations.
 
-    Every physical combination receives the action likelihood of
-    its hand class.
-
-    The resulting cumulative weights allow efficient random sampling
-    from the modeled opponent's inferred range.
+    Every physical combo receives the action likelihood assigned
+    to its hand class.
     """
 
     combo_population = []
@@ -165,13 +160,16 @@ def get_model_action_rate(
     model_three_bet,
 ):
     """
-    Return the statistic corresponding to the action being modeled.
+    Return the statistic associated with the modeled action.
 
-    RAISE uses PFR.
+    RAISE:
+        Uses PFR.
 
-    CALL is approximated as VPIP minus PFR.
+    CALL:
+        Approximated as VPIP minus PFR.
 
-    3BET uses the player's 3-bet frequency.
+    3BET:
+        Uses 3-bet frequency.
     """
 
     if observed_action == "RAISE":
@@ -226,53 +224,8 @@ def run_decision_fragility_simulation(
 
     The remaining opponents receive uniformly random legal hands.
 
-    Parameters
-    ----------
-    hero_hand:
-        Hero's two physical cards.
-
-    vpip, pfr, three_bet:
-        Observed statistics for the modeled opponent.
-
-    observed_hands:
-        Number of hands used to estimate those statistics.
-
-    position:
-        Position of the modeled opponent.
-
-    observed_action:
-        RAISE, CALL, or 3BET.
-
-    current_pot:
-        Pot size before Hero contributes the call.
-
-    call_amount:
-        Amount Hero must contribute to continue.
-
-    hand_classes:
-        The 169 canonical Hold'em starting-hand classes.
-
-    hand_strengths:
-        Baseline Monte Carlo strength estimate for each class.
-
-    available_combos:
-        Physical opponent combinations remaining after Hero blockers.
-
-    combo_counts:
-        Number of available combinations for each hand class.
-
-    number_of_models:
-        Number of plausible opponent models to generate.
-
-    trials_per_model:
-        Number of Monte Carlo deals per plausible model.
-
-    random_opponents:
-        Number of additional opponents receiving random hands.
-
-    Returns
-    -------
-    A dictionary containing model-level results and summary statistics.
+    Returns a dictionary containing the model-level results and
+    summary statistics.
     """
 
     # --------------------------------------------------------
@@ -302,7 +255,7 @@ def run_decision_fragility_simulation(
     # BREAK-EVEN EQUITY
     # --------------------------------------------------------
 
-    # This is the minimum equity Hero needs for calling to have
+    # Minimum equity Hero needs for calling to have
     # non-negative expected value.
 
     break_even_equity = (
@@ -326,7 +279,7 @@ def run_decision_fragility_simulation(
     profitable_models = 0
 
 
-    # Hero's cards cannot appear in any opponent hand or on the board.
+    # Hero's known cards cannot appear anywhere else.
 
     base_deck = [
         card
@@ -383,7 +336,7 @@ def run_decision_fragility_simulation(
         )
 
 
-        # Apply the heuristic position adjustments defined in
+        # Apply the heuristic position adjustments from
         # models/opponent_model.py.
 
         (
@@ -402,16 +355,15 @@ def run_decision_fragility_simulation(
         # RANGE-SHAPE UNCERTAINTY
         # ----------------------------------------------------
 
-        # The slope scale changes how sharply stronger hands become
-        # more likely to take the observed action.
+        # Different plausible models receive slightly different
+        # logistic curve steepness.
         #
-        # This creates uncertainty not only in the opponent's stats,
-        # but also in the shape of the range produced by those stats.
+        # The bounds are stored in config.py.
 
         slope_scale = (
             random.uniform(
-                0.85,
-                1.15,
+                SLOPE_SCALE_MIN,
+                SLOPE_SCALE_MAX,
             )
         )
 
@@ -460,14 +412,10 @@ def run_decision_fragility_simulation(
             # SAMPLE MODELED OPPONENT
             # ------------------------------------------------
 
-            # Select one actual two-card combination using the
-            # modeled action likelihoods as weights.
-
             random_weight = (
                 random.random()
                 * total_weight
             )
-
 
             combo_index = (
                 bisect.bisect_left(
@@ -475,7 +423,6 @@ def run_decision_fragility_simulation(
                     random_weight,
                 )
             )
-
 
             modeled_opponent_hand = (
                 combo_population[
@@ -488,8 +435,6 @@ def run_decision_fragility_simulation(
                 base_deck.copy()
             )
 
-
-            # Remove the modeled opponent's cards.
 
             for card in modeled_opponent_hand:
 
@@ -516,14 +461,12 @@ def run_decision_fragility_simulation(
                     )
                 )
 
-
                 random_opponent_hands.append(
                     random_hand
                 )
 
-
-                # Remove dealt cards so the same physical card
-                # cannot appear in multiple hands.
+                # Remove dealt cards so every physical card
+                # can only exist in one place.
 
                 for card in random_hand:
 
@@ -543,7 +486,7 @@ def run_decision_fragility_simulation(
 
 
             # ------------------------------------------------
-            # HERO HAND VALUE
+            # HERO SCORE
             # ------------------------------------------------
 
             hero_score = (
@@ -555,7 +498,7 @@ def run_decision_fragility_simulation(
 
 
             # ------------------------------------------------
-            # MODELED OPPONENT HAND VALUE
+            # MODELED OPPONENT SCORE
             # ------------------------------------------------
 
             modeled_opponent_score = (
@@ -572,7 +515,7 @@ def run_decision_fragility_simulation(
 
 
             # ------------------------------------------------
-            # RANDOM OPPONENT HAND VALUES
+            # RANDOM OPPONENT SCORES
             # ------------------------------------------------
 
             for random_hand in random_opponent_hands:
@@ -583,7 +526,6 @@ def run_decision_fragility_simulation(
                         + board
                     )
                 )
-
 
                 opponent_scores.append(
                     random_opponent_score
@@ -599,13 +541,13 @@ def run_decision_fragility_simulation(
                 + opponent_scores
             )
 
-
             best_score = max(
                 all_scores
             )
 
 
-            # Another player has a stronger hand.
+            # If another player has a stronger hand,
+            # Hero receives zero equity for this deal.
 
             if hero_score < best_score:
 
@@ -614,11 +556,10 @@ def run_decision_fragility_simulation(
 
             else:
 
-                # Hero has the best score, but the pot may be split
-                # with one or more opponents.
+                # Hero has the best score, but may be tied with
+                # one or more opponents.
 
                 number_of_winners = 0
-
 
                 for score in all_scores:
 
@@ -629,9 +570,9 @@ def run_decision_fragility_simulation(
 
                 # Examples:
                 #
-                # Hero wins alone       -> 1.0
-                # Hero ties one player  -> 0.5
-                # Hero ties two players -> 0.333...
+                # Hero wins outright      -> 1
+                # Hero ties one player    -> 1/2
+                # Hero ties two players   -> 1/3
 
                 hero_equity_share = (
                     1
@@ -658,9 +599,9 @@ def run_decision_fragility_simulation(
         # EXPECTED VALUE
         # ====================================================
 
-        # Net EV of calling:
+        # Net expected value of calling:
         #
-        # EV = equity * final pot - amount called
+        # EV = equity * final pot - call amount
 
         model_ev = (
             model_equity
@@ -675,7 +616,6 @@ def run_decision_fragility_simulation(
         model_equities.append(
             model_equity
         )
-
 
         model_evs.append(
             model_ev
@@ -744,18 +684,10 @@ def run_decision_fragility_simulation(
 
     # q = fraction of models where calling has positive EV.
     #
-    # Fragility:
-    #
     # F = 1 - |2q - 1|
     #
-    # Examples:
-    #
-    # q = 1.00 -> F = 0.00
-    # q = 0.00 -> F = 0.00
-    # q = 0.50 -> F = 1.00
-    #
-    # Therefore, maximum fragility occurs when the plausible
-    # models are evenly split about the correct decision.
+    # F = 0 when all models agree.
+    # F = 1 when the models are split 50/50.
 
     fragility_score = (
         1
@@ -776,11 +708,9 @@ def run_decision_fragility_simulation(
         / len(model_equities)
     )
 
-
     minimum_equity = min(
         model_equities
     )
-
 
     maximum_equity = max(
         model_equities
@@ -792,11 +722,9 @@ def run_decision_fragility_simulation(
         / len(model_evs)
     )
 
-
     minimum_ev = min(
         model_evs
     )
-
 
     maximum_ev = max(
         model_evs
@@ -808,13 +736,15 @@ def run_decision_fragility_simulation(
     )
 
 
-    # Approximate empirical 5th and 95th percentiles.
+    # Approximate empirical 5th percentile.
 
     lower_index = int(
         0.05
         * len(sorted_equities)
     )
 
+
+    # Approximate empirical 95th percentile.
 
     upper_index = (
         int(
@@ -825,6 +755,9 @@ def run_decision_fragility_simulation(
     )
 
 
+    # Keep the indices valid even if the number of models
+    # becomes very small during testing.
+
     lower_index = max(
         0,
         min(
@@ -832,7 +765,6 @@ def run_decision_fragility_simulation(
             len(sorted_equities) - 1,
         ),
     )
-
 
     upper_index = max(
         0,
@@ -849,7 +781,6 @@ def run_decision_fragility_simulation(
         ]
     )
 
-
     upper_equity = (
         sorted_equities[
             upper_index
@@ -864,7 +795,7 @@ def run_decision_fragility_simulation(
 
 
     # ========================================================
-    # RETURN RESULTS TO MAIN.PY
+    # RETURN RESULTS
     # ========================================================
 
     return {

@@ -1,48 +1,38 @@
+"""
+Opponent behavior model.
+
+This module converts observed player statistics such as VPIP, PFR,
+and 3-bet frequency into position-adjusted action probabilities
+for each starting-hand class.
+
+The current model is heuristic.
+
+The position multipliers, logistic slopes, and calibration settings
+are defined in config.py so that the modeling assumptions are kept
+separate from the implementation logic.
+"""
+
+
 import math
 
-
-# ============================================================
-# POSITION ADJUSTMENT FACTORS
-# ============================================================
-
-# These multipliers are heuristic assumptions.
-#
-# They are not learned from real poker data and they are not
-# solver-derived GTO frequencies.
-#
-# The purpose is to approximate the general idea that players
-# tend to play tighter ranges from early positions and wider
-# ranges from later positions.
-#
-# These values can eventually be replaced by machine-learning
-# estimates trained on real hand histories.
-
-VPIP_POSITION_FACTOR = {
-    "UTG": 0.70,
-    "HJ": 0.85,
-    "CO": 1.05,
-    "BTN": 1.25,
-    "SB": 1.20,
-    "BB": 1.35,
-}
-
-PFR_POSITION_FACTOR = {
-    "UTG": 0.65,
-    "HJ": 0.82,
-    "CO": 1.05,
-    "BTN": 1.30,
-    "SB": 1.15,
-    "BB": 0.80,
-}
-
-THREEBET_POSITION_FACTOR = {
-    "UTG": 0.80,
-    "HJ": 0.90,
-    "CO": 1.00,
-    "BTN": 1.10,
-    "SB": 1.20,
-    "BB": 1.25,
-}
+from config import (
+    CALIBRATION_HIGH,
+    CALIBRATION_ITERATIONS,
+    CALIBRATION_LOW,
+    CALL_SLOPE,
+    MIN_ACTION_LIKELIHOOD,
+    PFR_MAX,
+    PFR_MIN,
+    PFR_POSITION_FACTOR,
+    RAISE_SLOPE,
+    THREEBET_MAX,
+    THREEBET_MIN,
+    THREEBET_POSITION_FACTOR,
+    THREEBET_SLOPE,
+    VPIP_MAX,
+    VPIP_MIN,
+    VPIP_POSITION_FACTOR,
+)
 
 
 # ============================================================
@@ -55,12 +45,13 @@ def clamp(
     maximum,
 ):
     """
-    Restrict a number to a specified range.
+    Restrict a value to a specified range.
 
-    Example:
-        clamp(1.2, 0, 1) returns 1
-        clamp(-0.2, 0, 1) returns 0
-        clamp(0.4, 0, 1) returns 0.4
+    Examples:
+
+        clamp(0.5, 0, 1) -> 0.5
+        clamp(-1, 0, 1)  -> 0
+        clamp(2, 0, 1)   -> 1
     """
 
     return max(
@@ -85,23 +76,33 @@ def adjust_rates_for_position(
     """
     Adjust a player's overall preflop statistics based on position.
 
-    Parameters:
-        vpip_rate:
-            Overall VPIP as a decimal.
-            Example: 25% VPIP is represented as 0.25.
+    Parameters
+    ----------
+    vpip_rate:
+        Overall VPIP as a decimal.
 
-        pfr_rate:
-            Overall preflop raise frequency as a decimal.
+        Example:
+            25% VPIP is represented as 0.25.
 
-        three_bet_rate:
-            Overall 3-bet frequency as a decimal.
+    pfr_rate:
+        Overall preflop raise frequency as a decimal.
 
-        position:
-            One of:
-            UTG, HJ, CO, BTN, SB, BB
+    three_bet_rate:
+        Overall 3-bet frequency as a decimal.
 
-    Returns:
-        A tuple containing:
+    position:
+        One of:
+
+        UTG
+        HJ
+        CO
+        BTN
+        SB
+        BB
+
+    Returns
+    -------
+    A tuple containing:
 
         (
             adjusted_vpip,
@@ -109,38 +110,38 @@ def adjust_rates_for_position(
             adjusted_three_bet
         )
 
-    These adjustments are currently heuristic assumptions.
+    The position multipliers themselves are defined in config.py.
     """
 
-    # Multiply the player's overall VPIP by the positional factor.
+    # Adjust VPIP based on position.
     #
-    # For example, a BTN factor above 1 widens the modeled range,
-    # while a UTG factor below 1 tightens it.
+    # A factor below 1 tightens the modeled frequency.
+    # A factor above 1 widens it.
 
     adjusted_vpip = clamp(
         vpip_rate
         * VPIP_POSITION_FACTOR[
             position
         ],
-        0.001,
-        0.95,
+        VPIP_MIN,
+        VPIP_MAX,
     )
 
 
-    # Apply the same idea to the player's preflop raise frequency.
+    # Adjust preflop raise frequency based on position.
 
     adjusted_pfr = clamp(
         pfr_rate
         * PFR_POSITION_FACTOR[
             position
         ],
-        0.001,
-        0.90,
+        PFR_MIN,
+        PFR_MAX,
     )
 
 
-    # A player cannot raise preflop more often than they voluntarily
-    # enter the pot.
+    # A player's preflop raise frequency cannot logically
+    # exceed their VPIP.
     #
     # Therefore:
     #
@@ -152,15 +153,15 @@ def adjust_rates_for_position(
     )
 
 
-    # Adjust 3-bet frequency for position.
+    # Adjust 3-bet frequency based on position.
 
     adjusted_three_bet = clamp(
         three_bet_rate
         * THREEBET_POSITION_FACTOR[
             position
         ],
-        0.001,
-        0.50,
+        THREEBET_MIN,
+        THREEBET_MAX,
     )
 
 
@@ -177,26 +178,23 @@ def adjust_rates_for_position(
 
 def sigmoid(x):
     """
-    Convert a raw number into a smooth probability from 0 to 1.
+    Convert a raw value into a smooth probability between 0 and 1.
 
-    The opponent model uses the sigmoid function so that stronger
-    hands gradually become more likely to take an action rather
-    than using a hard cutoff.
+    The opponent model uses a sigmoid so that action probabilities
+    change gradually as hand strength increases.
 
-    Instead of saying:
+    Rather than using a hard cutoff such as:
 
         raise every hand above 60% equity
 
-    the model can say:
+    the model can instead represent:
 
         weak hand   -> low raise probability
         medium hand -> medium raise probability
         strong hand -> high raise probability
     """
 
-    # Standard sigmoid form.
-    #
-    # This version is safe when x is positive.
+    # Standard sigmoid expression for non-negative values.
 
     if x >= 0:
 
@@ -210,10 +208,10 @@ def sigmoid(x):
         )
 
 
-    # For very negative numbers, math.exp(-x) can become extremely
-    # large and cause numerical overflow.
+    # This mathematically equivalent form is used for negative x.
     #
-    # This mathematically equivalent version avoids that problem.
+    # It avoids numerical overflow that could occur from
+    # calculating math.exp(-x) when x is very negative.
 
     exp_x = math.exp(x)
 
@@ -240,36 +238,33 @@ def calibrate_threshold(
     combo_counts,
 ):
     """
-    Find the hand-strength threshold that makes the model's average
-    action frequency approximately match the player's observed rate.
+    Find the hand-strength threshold that makes the modeled action
+    frequency approximately equal the player's observed frequency.
 
     Example:
 
-        Suppose the player's adjusted PFR is 20%.
+        If adjusted PFR is 20%, this function finds a threshold
+        such that the weighted average:
 
-        The model needs to find a threshold such that, across all
-        possible starting-hand combinations:
+            P(raise | hand)
 
-            average P(raise | hand) ~= 20%
+        across all available physical hand combinations is
+        approximately 20%.
 
-    The function uses binary search to find that threshold.
-
-    The resulting threshold separates weaker hands from stronger hands,
-    but the sigmoid keeps the transition smooth rather than creating
-    a hard range cutoff.
+    Binary search is used because changing the threshold moves
+    the modeled frequency in a predictable direction.
     """
 
-    # Search across a deliberately wide range of possible thresholds.
+    # These search limits are stored in config.py.
 
-    low = -1.0
-    high = 2.0
+    low = CALIBRATION_LOW
+    high = CALIBRATION_HIGH
 
 
-    # 70 binary-search iterations gives much more precision than
-    # this project actually needs, while still being extremely fast.
+    # Repeatedly narrow the search interval.
 
     for iteration in range(
-        70
+        CALIBRATION_ITERATIONS
     ):
 
         midpoint = (
@@ -281,19 +276,18 @@ def calibrate_threshold(
         combination_total = 0
 
 
-        # Calculate the average modeled action probability across
-        # every available physical starting-hand combination.
+        # Calculate the implied action frequency across every
+        # available starting-hand class.
 
         for hand_class in hand_classes:
 
-            # Number of physical card combinations remaining for
-            # this hand class after blockers.
+            # Number of remaining physical combinations.
             #
-            # Example:
+            # Examples before blockers:
             #
-            # AA  = normally 6 combinations
-            # AKs = normally 4 combinations
-            # AKo = normally 12 combinations
+            # AA  -> 6 combinations
+            # AKs -> 4 combinations
+            # AKo -> 12 combinations
 
             count = (
                 combo_counts[
@@ -302,7 +296,8 @@ def calibrate_threshold(
             )
 
 
-            # Baseline Monte Carlo equity of this starting-hand class.
+            # Baseline Monte Carlo strength estimate for this
+            # starting-hand class.
 
             strength = (
                 hand_strengths[
@@ -311,8 +306,8 @@ def calibrate_threshold(
             )
 
 
-            # Convert the hand's strength relative to the threshold
-            # into an action probability.
+            # Convert hand strength relative to the current
+            # threshold into an action probability.
 
             probability = sigmoid(
                 slope
@@ -323,8 +318,9 @@ def calibrate_threshold(
             )
 
 
-            # Weight the probability by the number of physical
-            # combinations represented by this hand class.
+            # Weight by physical combo count so a hand class with
+            # more possible combinations contributes more probability
+            # mass than one with fewer combinations.
 
             weighted_total += (
                 probability
@@ -337,19 +333,17 @@ def calibrate_threshold(
             )
 
 
-        # This is the action frequency implied by the current threshold.
-
         current_frequency = (
             weighted_total
             / combination_total
         )
 
 
-        # If the model currently predicts the action too frequently,
+        # If the model predicts the action too frequently,
         # increase the threshold.
         #
-        # A higher threshold makes the action require stronger hands,
-        # which lowers the overall action frequency.
+        # A higher threshold requires stronger hands to receive
+        # high action probabilities.
 
         if (
             current_frequency
@@ -360,15 +354,11 @@ def calibrate_threshold(
 
 
         # If the modeled action is too rare, lower the threshold.
-        #
-        # This allows weaker hands to receive higher probabilities.
 
         else:
 
             high = midpoint
 
-
-    # Return the midpoint of the final search interval.
 
     return (
         low + high
@@ -392,19 +382,14 @@ def build_action_likelihoods(
     """
     Estimate P(action | hand class) for every starting-hand class.
 
-    In other words:
-
-        If the opponent holds a particular hand,
-        how likely are they to take the observed action?
-
-    The supported actions are:
+    Supported actions:
 
         RAISE
         CALL
         3BET
 
-    These probabilities are later used in the Bayesian-style range
-    update:
+    These probabilities are later used in the Bayesian-style
+    opponent range update:
 
         P(hand | action)
             proportional to
@@ -413,8 +398,8 @@ def build_action_likelihoods(
     Important:
         This is currently a heuristic behavioral model.
 
-        The logistic curve shapes and slope values are assumptions,
-        not probabilities learned from real poker decisions.
+        The logistic slopes, position multipliers, and calibration
+        assumptions are not learned from real poker hand data.
     """
 
     likelihoods = {}
@@ -426,27 +411,26 @@ def build_action_likelihoods(
 
     if action == "RAISE":
 
-        # The slope controls how sharply action probability rises
-        # as hand strength increases.
-        #
-        # A larger slope produces a more abrupt transition between
-        # hands that rarely raise and hands that frequently raise.
+        # The configured raise slope controls how sharply
+        # raise probability increases with hand strength.
 
         slope = (
-            18
+            RAISE_SLOPE
             * slope_scale
         )
 
 
-        # Find the threshold that makes the overall modeled raise
-        # frequency match the opponent's adjusted PFR.
+        # Calibrate the threshold so the weighted average
+        # raise probability matches the player's adjusted PFR.
 
-        threshold = calibrate_threshold(
-            pfr_rate,
-            slope,
-            hand_classes,
-            hand_strengths,
-            combo_counts,
+        threshold = (
+            calibrate_threshold(
+                pfr_rate,
+                slope,
+                hand_classes,
+                hand_strengths,
+                combo_counts,
+            )
         )
 
 
@@ -454,7 +438,7 @@ def build_action_likelihoods(
 
             # Estimate:
             #
-            # P(raise | this hand class)
+            # P(raise | this hand)
 
             likelihoods[
                 hand_class
@@ -476,13 +460,13 @@ def build_action_likelihoods(
     elif action == "CALL":
 
         slope = (
-            16
+            CALL_SLOPE
             * slope_scale
         )
 
 
-        # First estimate the threshold for voluntarily entering
-        # the pot at all.
+        # VPIP approximates the frequency with which a player
+        # voluntarily enters the pot.
 
         vpip_threshold = (
             calibrate_threshold(
@@ -495,7 +479,8 @@ def build_action_likelihoods(
         )
 
 
-        # Then estimate the threshold for raising.
+        # PFR approximates the subset of those hands that the
+        # player raises.
 
         raise_threshold = (
             calibrate_threshold(
@@ -545,7 +530,7 @@ def build_action_likelihoods(
 
             # Simplifying assumption:
             #
-            # VPIP consists approximately of calls plus raises.
+            # VPIP roughly consists of calls + raises.
             #
             # Therefore:
             #
@@ -559,16 +544,16 @@ def build_action_likelihoods(
             )
 
 
-            # Prevent the likelihood from becoming exactly zero.
+            # Keep every hand's likelihood slightly above zero.
             #
-            # A zero likelihood would completely eliminate a hand
-            # from the inferred posterior range.
+            # An exact zero would completely eliminate that hand
+            # from the posterior range.
 
             likelihoods[
                 hand_class
             ] = max(
                 call_probability,
-                1e-12,
+                MIN_ACTION_LIKELIHOOD,
             )
 
 
@@ -578,18 +563,17 @@ def build_action_likelihoods(
 
     elif action == "3BET":
 
-        # The 3-bet model uses a steeper curve because 3-betting
-        # generally represents a narrower and stronger subset of
-        # the player's preflop strategy in this heuristic model.
+        # The 3-bet slope is intentionally steeper in the current
+        # heuristic configuration.
 
         slope = (
-            24
+            THREEBET_SLOPE
             * slope_scale
         )
 
 
-        # Calibrate the model so the average probability matches
-        # the opponent's adjusted 3-bet frequency.
+        # Calibrate the threshold so the average modeled 3-bet
+        # probability matches the player's adjusted 3-bet rate.
 
         threshold = (
             calibrate_threshold(
@@ -606,7 +590,7 @@ def build_action_likelihoods(
 
             # Estimate:
             #
-            # P(3-bet | this hand class)
+            # P(3-bet | this hand)
 
             likelihoods[
                 hand_class
